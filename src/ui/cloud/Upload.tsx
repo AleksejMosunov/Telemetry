@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { prepareSession, type PreparedSession } from '../../data/upload';
 import { commitSession, createConfig, createDriver, aliasHistory, findDuplicate, type SessionRow } from '../../data/api';
-import { matchTracks, findConfig } from '../../core/trackid';
+import { matchTracks, findConfig, directionName, clockwise } from '../../core/trackid';
 import type { CloudState } from './state';
 import { Shell } from './Auth';
 import { lapTime } from '../format';
@@ -58,6 +58,10 @@ export function Upload({ cloud, files, onClose, onDone }: {
         const exact = cloud.drivers.find(
           d => d.name.trim().toLowerCase() === p.racer.trim().toLowerCase());
         const hintIds = cloud.team ? await aliasHistory(cloud.team.id, p.racer) : [];
+        // Название новой конфигурации подсказываем стороной обхода: чаще всего
+        // вторая конфигурация на площадке — это та же трасса в обратную сторону.
+        const dir = directionName(p.signature);
+        const suggest = dir[0].toUpperCase() + dir.slice(1);
         out.push({
           key: `${f.name}|${f.size}|${f.lastModified}`,
           p, duplicate: dup,
@@ -66,12 +70,12 @@ export function Upload({ cloud, files, onClose, onDone }: {
           note: hit
             ? `${hit.config.trackName} · ${hit.config.name} — узнал по траектории (расхождение ${hit.match.spread.toFixed(1)} м)`
             : venueId
-              ? `Площадка «${venueName}» знакома, но конфигурация новая`
+              ? `Площадка «${venueName}» знакома, но обход ${dir} — конфигурация новая`
               : 'Новая трасса',
           driverId: exact?.id ?? '',
           hintIds: hintIds.filter(id => id !== exact?.id),
           newTrackName: venueId ? venueName : '',
-          newConfigName: hit ? '' : 'Основная',
+          newConfigName: hit ? '' : suggest,
           state: 'ready',
         });
       } catch (e) {
@@ -211,6 +215,11 @@ function Row({ it, cloud, patch }: {
         <span className="text-[11px] text-[var(--muted)] num">
           {s.laps.length} кругов · лучший {lapTime(s.stats.best)} · {s.trackLength.toFixed(0)} м ·
           {' '}{(it.p.sizes.csv / 1048576).toFixed(1)} МБ → {(it.p.sizes.packed / 1024).toFixed(0)} КБ
+        </span>
+        <span className="text-[11px] px-1.5 py-0.5 rounded"
+          style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--muted)' }}
+          title="Сторона обхода круга, определена по траектории">
+          {clockwise(it.p.signature) ? '↻' : '↺'} {directionName(it.p.signature)}
         </span>
         {it.state === 'saving' && <span className="text-[11px] text-[var(--muted)] ml-auto">сохраняю…</span>}
         {it.state === 'done' && <span className="text-[11px] text-[var(--good)] ml-auto">загружен</span>}

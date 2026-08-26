@@ -93,6 +93,24 @@ export async function createDriver(teamId: string, name: string): Promise<Driver
   return data as Driver;
 }
 
+export async function renameDriver(id: string, name: string) {
+  const { error } = await supabase().from('drivers').update({ name }).eq('id', id);
+  fail('Не удалось переименовать пилота', error);
+}
+
+/** Удаление пилота. Заезды при этом не пропадают — они остаются в библиотеке
+ *  без пилота, и их можно переназначить. Так задано внешним ключом в схеме. */
+export async function deleteDriver(id: string) {
+  const { error } = await supabase().from('drivers').delete().eq('id', id);
+  fail('Не удалось удалить пилота', error);
+}
+
+/** Переназначить заезд другому пилоту — в том числе снятому. */
+export async function reassignSession(sessionId: string, driverId: string | null) {
+  const { error } = await supabase().from('sessions').update({ driver_id: driverId }).eq('id', sessionId);
+  fail('Не удалось сменить пилота заезда', error);
+}
+
 /**
  * С кем раньше связывали это значение поля Racer.
  *
@@ -162,6 +180,22 @@ export async function createConfig(
     id: data!.id as string, name: data!.name as string,
     trackId, trackName, length: data!.length_m as number, signature: sig,
   };
+}
+
+export async function renameConfig(id: string, name: string) {
+  const { error } = await supabase().from('track_configs').update({ name }).eq('id', id);
+  fail('Не удалось переименовать конфигурацию', error);
+}
+
+/** Удаление конфигурации трассы. Разрешаем только пустую: иначе заезды
+ *  остались бы без привязки, а восстановить её потом нечем. */
+export async function deleteConfig(id: string) {
+  const { count, error: cErr } = await supabase()
+    .from('sessions').select('id', { count: 'exact', head: true }).eq('config_id', id);
+  fail('Не удалось проверить конфигурацию', cErr);
+  if (count) throw new Error(`В этой конфигурации ${count} заездов — сначала удалите их`);
+  const { error } = await supabase().from('track_configs').delete().eq('id', id);
+  fail('Не удалось удалить конфигурацию', error);
 }
 
 // ───────────────────────────── заезды ─────────────────────────────

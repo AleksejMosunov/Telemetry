@@ -22,7 +22,39 @@ export interface TrackSignature {
   length: number;
   /** осевая: метры от собственной средней точки, [x0,y0,x1,y1,...] */
   outline: number[];
+  /** обход по часовой стрелке — справочное поле, чтобы направление было
+   *  видно прямо в базе; при сравнении всегда пересчитывается из outline */
+  cw?: boolean;
 }
+
+/**
+ * Сторона обхода по знаку площади замкнутого контура (формула шнурков).
+ * Это свойство самой петли, а не результат сопоставления точек, поэтому
+ * направление определяется надёжнее, чем через порядок совпавших индексов.
+ * Оси: x на восток, y на север — отрицательная площадь означает по часовой.
+ */
+export function isClockwise(outline: number[]): boolean {
+  const n = outline.length / 2;
+  let area = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    area += outline[i * 2] * outline[j * 2 + 1] - outline[j * 2] * outline[i * 2 + 1];
+  }
+  return area < 0;
+}
+
+/**
+ * Сторона обхода трассы. Считается из линии каждый раз, а не берётся из поля
+ * cw: хранимый флаг может разойтись с геометрией, и тогда заезд молча уедет
+ * не в ту конфигурацию. Единственный источник правды — сама линия, а расчёт
+ * по паре сотен точек стоит пренебрежимо мало. Поле cw остаётся в базе как
+ * справочное, чтобы направление было видно запросом.
+ */
+export const clockwise = (s: TrackSignature) => isClockwise(s.outline);
+
+/** Как это называется по-человечески. */
+export const directionName = (s: TrackSignature) =>
+  clockwise(s) ? 'по часовой' : 'против часовой';
 
 export function trackSignature(cl: Centerline): TrackSignature {
   let sx = 0, sy = 0;
@@ -39,6 +71,7 @@ export function trackSignature(cl: Centerline): TrackSignature {
     lon: cl.proj.lon0 + cx / cl.proj.mPerLon,
     length: +cl.length.toFixed(2),
     outline,
+    cw: isClockwise(outline),
   };
 }
 
@@ -120,6 +153,9 @@ export function matchTracks(a: TrackSignature, b: TrackSignature): TrackMatch {
   const lengthDiff = Math.abs(a.length - b.length) / Math.max(a.length, b.length);
   // 98-й процентиль, а не максимум: одна кривая точка не должна решать всё.
   const spread = pct(al.dist, 0.98);
+  // Форму берём из сопоставления, а сторону обхода — из знака площади:
+  // это независимая величина, её не сбить неудачным подбором сдвига.
+  const sameDirection = clockwise(a) === clockwise(b);
 
   return {
     km,
@@ -127,8 +163,8 @@ export function matchTracks(a: TrackSignature, b: TrackSignature): TrackMatch {
     cover: al.dist.filter(v => v <= TOL).length / al.dist.length,
     spread,
     lengthDiff,
-    sameDirection: al.dir === 1,
-    sameConfig: km < 2 && al.dir === 1 && spread < TOL && lengthDiff < 0.02,
+    sameDirection,
+    sameConfig: km < 2 && sameDirection && spread < TOL && lengthDiff < 0.02,
   };
 }
 
