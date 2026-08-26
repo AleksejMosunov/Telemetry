@@ -1,4 +1,4 @@
-import type { Analysis, DriverResult } from '../core/pipeline';
+import { time24, type Analysis, type DriverResult } from '../core/pipeline';
 
 export interface Insight {
   kind: 'key' | 'pattern' | 'note' | 'caveat';
@@ -59,7 +59,7 @@ export function buildInsights(a: Analysis, refId: string, name: (d: DriverResult
     const N = a.corners.length;
     if (N >= 4 && exitWorse / N >= 0.65) {
       const hint = apexBetter / N >= 0.35
-        ? ` При этом в апексе он быстрее в ${apexBetter} из ${N} — скорость в повороте есть, а на выходе её нет. ` +
+        ? ` При этом в низшей точке он быстрее в ${apexBetter} из ${N} — скорость в повороте есть, а на выходе её нет. ` +
           `Типичная картина перебора на входе: карт не встаёт на дугу, руль остаётся повёрнутым, газ открывается позже.`
         : '';
       out.push({
@@ -80,7 +80,7 @@ export function buildInsights(a: Analysis, refId: string, name: (d: DriverResult
         kind: 'note',
         title: `${name(d)}: крупнейшие потери — ${top.map(t => t.z.corner.name).join(', ')}`,
         body: top.map(t =>
-          `${t.z.corner.name} (+${t.dt.toFixed(3)} с, апекс ${at(d.medV, t.z.corner.sApex).toFixed(1)} против ${at(ref.medV, t.z.corner.sApex).toFixed(1)} км/ч)`
+          `${t.z.corner.name} (+${t.dt.toFixed(3)} с, мин. скорость ${d.zoneMed[a.zones.indexOf(t.z)].vMin.toFixed(1)} против ${ref.zoneMed[a.zones.indexOf(t.z)].vMin.toFixed(1)} км/ч)`
         ).join('; ') + '.',
       });
     }
@@ -114,12 +114,13 @@ export function buildInsights(a: Analysis, refId: string, name: (d: DriverResult
   }
 
   // --- честная оговорка про разное время выезда ---
-  const times = a.drivers.map(d => d.meta['Time']).filter(Boolean);
+  const times = a.drivers.map(d => time24(d.meta['Time'])).filter(Boolean);
   if (new Set(times).size > 1 && a.drivers.length > 1) {
+    const order = [...a.drivers].sort((p, q) => time24(p.meta['Time']).localeCompare(time24(q.meta['Time'])));
     out.push({
       kind: 'caveat',
       title: 'Заезды сделаны в разное время',
-      body: `${a.drivers.map(d => `${name(d)} — ${d.meta['Time']}`).join(', ')}. ` +
+      body: `Выезжали в ${order.map(d => time24(d.meta['Time'])).join(' и ')} — раньше всех «${name(order[0])}». ` +
         `Часть разницы во времени круга может быть разогревом трассы и остатком топлива, а не пилотом. ` +
         `Сравнение по форме траектории и по скорости на выходе от этого не страдает — оно надёжнее абсолютных времён.`,
     });

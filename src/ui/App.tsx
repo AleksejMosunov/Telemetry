@@ -9,6 +9,21 @@ import { Consistency } from './views/Consistency';
 import { Findings } from './views/Findings';
 
 export type LapMode = 'median' | 'best';
+
+const NAME_KEY = 'karting.driverNames';
+
+/** Имена пилотов переживают перезагрузку: ключ — отпечаток заезда, а не порядок файлов. */
+function loadNames(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(NAME_KEY) || '{}'); } catch { return {}; }
+}
+function persistName(fingerprint: string, value: string) {
+  try {
+    const all = loadNames();
+    const v = value.trim();
+    if (v) all[fingerprint] = v; else delete all[fingerprint];
+    localStorage.setItem(NAME_KEY, JSON.stringify(all));
+  } catch { /* приватный режим — просто не запоминаем */ }
+}
 const TABS = [
   ['overview', 'Обзор'], ['corners', 'Повороты'], ['traces', 'Графики'],
   ['consistency', 'Стабильность'], ['findings', 'Выводы'],
@@ -28,6 +43,10 @@ export interface ViewCtx {
   T: (d: DriverResult) => Float64Array;
   LAT: (d: DriverResult) => Float64Array;
   Z: (d: DriverResult) => DriverResult['zoneMed'];
+  /** длина реально пройденной траектории по зонам, м */
+  ZP: (d: DriverResult) => Float64Array;
+  /** разброс траектории по кругам, м; в режиме лучшего круга его нет */
+  LATSD: (d: DriverResult) => Float64Array | null;
 }
 
 export function App() {
@@ -57,7 +76,8 @@ export function App() {
       });
       w.terminate();
       setA(result);
-      setNames({});
+      const stored = loadNames();
+      setNames(Object.fromEntries(result.drivers.map(d => [d.id, stored[d.fingerprint] ?? ''])));
       // опорным берём самого быстрого — от него считаются все дельты
       setRefId(result.drivers.reduce((p, q) => (p.stats.best <= q.stats.best ? p : q)).id);
     } catch (e) {
@@ -88,12 +108,14 @@ export function App() {
     const idx = (d: DriverResult) => a.drivers.indexOf(d);
     return {
       a, ref, refId: ref.id, lapMode, cursorS, setCursorS,
-      name: (d) => names[d.id] ?? d.name,
+      name: (d) => (names[d.id]?.trim() ? names[d.id].trim() : d.name),
       color: (d) => driverColor(idx(d)),
       V: (d) => (lapMode === 'best' ? d.bestV : d.medV),
       T: (d) => (lapMode === 'best' ? d.bestT : d.medT),
       LAT: (d) => (lapMode === 'best' ? d.bestLat : d.medLat),
       Z: (d) => (lapMode === 'best' ? d.zoneBest : d.zoneMed),
+      ZP: (d) => (lapMode === 'best' ? d.bestPathByZone : d.medPathByZone),
+      LATSD: (d) => (lapMode === 'best' ? null : d.medLatSd),
     };
   }, [a, refId, lapMode, cursorS, names]);
 
@@ -118,12 +140,23 @@ export function App() {
                 >
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: driverColor(i) }} />
                   <span className="flex flex-col leading-tight">
+                    <span className="flex items-center gap-1">
                     <input
-                      value={names[d.id] ?? d.name}
-                      onChange={e => setNames(n => ({ ...n, [d.id]: e.target.value }))}
+                      value={names[d.id] ?? ''}
+                      placeholder={d.name}
+                      title="Имя пилота — можно вписать своё, оно запомнится"
+                      onChange={e => {
+                        setNames(n => ({ ...n, [d.id]: e.target.value }));
+                        persistName(d.fingerprint, e.target.value);
+                      }}
                       onClick={e => e.stopPropagation()}
-                      className="bg-transparent outline-none text-[13px] font-medium w-[150px] focus:border-b focus:border-[var(--line)]"
+                      className="bg-transparent outline-none text-[13px] font-medium w-[150px] rounded-sm
+                        border-b border-dashed border-transparent hover:border-[var(--muted-2)]
+                        focus:border-solid focus:border-[var(--text)]
+                        placeholder:text-[var(--muted)] placeholder:font-normal transition-colors"
                     />
+                    <span aria-hidden className="text-[10px] text-[var(--muted-2)] opacity-0 group-hover:opacity-100 transition-opacity">✎</span>
+                    </span>
                     <span className="num text-[11px] text-[var(--muted)]">
                       {lapTime(d.stats.best)} · σ {d.stats.sd.toFixed(3)}
                       {d.id === refId && <span className="text-[var(--muted-2)]"> · опорный</span>}
@@ -140,7 +173,7 @@ export function App() {
                 {(['median', 'best'] as const).map(m => (
                   <button key={m} onClick={() => setLapMode(m)}
                     className={`px-3 py-1.5 transition ${lapMode === m ? 'bg-[var(--panel-2)] text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}>
-                    {m === 'median' ? 'медианный круг' : 'лучший круг'}
+                    {m === 'median' ? 'усреднённый круг' : 'лучший круг'}
                   </button>
                 ))}
               </div>
@@ -213,7 +246,8 @@ function Splash({ busy }: { busy?: boolean }) {
           <div className="text-[var(--muted)] text-[13px] max-w-md leading-relaxed">
             Экспорт из RaceStudio 3 с включёнными каналами GPS Latitude и GPS Longitude.
             Один файл — анализ заезда, несколько — сравнение пилотов.
-            Трасса и повороты определяются из логов сами.
+            Трасса и повороты определяются из логов сами, а имена пилотов
+            вписываются в шапке и запоминаются на будущее.
           </div>
         </>
       )}

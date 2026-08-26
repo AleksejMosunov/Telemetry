@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import type uPlot from 'uplot';
 import type { ViewCtx } from '../App';
 import type { DriverResult } from '../../core/pipeline';
-import { TrackMap, type MapMode } from '../TrackMap';
+import { TrackMap, MapLegend, type MapMode } from '../TrackMap';
 import { Chart } from '../Chart';
 import { lapTime, delta, num, deltaColor } from '../format';
 
@@ -19,16 +19,35 @@ export function deltaRate(t: Float64Array, tRef: Float64Array, win = 12): Float6
 export function Overview({ ctx }: { ctx: ViewCtx }) {
   const { a, ref, name, color, V, T } = ctx;
   const [mode, setMode] = useState<MapMode>('speed');
+  const [hoverS, setHoverS] = useState<number | null>(null);
   const others = a.drivers.filter(d => d.id !== ref.id);
   const [deltaOf, setDeltaOf] = useState(others[0]?.id ?? ref.id);
+  const deltaDriver = a.drivers.find(x => x.id === deltaOf) ?? ref;
 
-  const mapValues = useMemo(() => {
-    if (mode === 'delta') {
-      const d = a.drivers.find(x => x.id === deltaOf) ?? ref;
-      return deltaRate(T(d), T(ref));
+  const mapValues = useMemo(
+    () => (mode === 'delta' ? deltaRate(T(deltaDriver), T(ref)) : V(ref)),
+    [mode, deltaDriver, ref, T, V],
+  );
+
+  const range = useMemo(() => {
+    let lo = Infinity, hi = -Infinity;
+    for (const v of mapValues) { if (!isFinite(v)) continue; lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    return { lo, hi, absMax: Math.max(Math.abs(lo), Math.abs(hi)) };
+  }, [mapValues]);
+
+  /** Подпись у поворота: без чисел карта не читается. */
+  const cornerLabel = useMemo(() => {
+    if (mode === 'lines') return undefined;
+    if (mode === 'speed') {
+      return (ci: number) => `${V(ref)[Math.round(a.corners[ci].sApex) % a.grid.length].toFixed(0)}`;
     }
-    return V(ref);
-  }, [mode, deltaOf, a, ref, T, V]);
+    return (ci: number) => {
+      const zi = a.zones.findIndex(z => z.corner.id === a.corners[ci].id);
+      if (zi < 0) return null;
+      const dt = ctx.Z(deltaDriver)[zi].tZone - ctx.Z(ref)[zi].tZone;
+      return `${dt >= 0 ? '+' : '−'}${Math.abs(dt).toFixed(2)}`;
+    };
+  }, [mode, a, ref, V, ctx, deltaDriver]);
 
   const lines = useMemo(
     () => a.drivers.map(d => ({ lat: ctx.LAT(d), color: color(d), width: d.id === ref.id ? 2.6 : 2 })),
@@ -89,11 +108,29 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
             </div>
           </div>
           <TrackMap a={a} mode={mode} values={mapValues} lines={lines}
-            cursorS={ctx.cursorS} height={440} />
-          <div className="text-[11px] text-[var(--muted-2)] mt-2">
-            {mode === 'speed' && `Цвет — скорость «${name(ref)}» на медианном круге.`}
-            {mode === 'delta' && `Красное — где теряет время относительно «${name(ref)}», зелёное — где выигрывает.`}
-            {mode === 'lines' && `Реальные траектории: осевая линия плюс измеренное боковое смещение.`}
+            cornerLabel={cornerLabel} cursorS={hoverS ?? ctx.cursorS}
+            height={440} onHover={setHoverS} />
+
+          <MapLegend mode={mode} min={range.lo}
+            max={mode === 'speed' ? range.hi : range.absMax * 100}
+            unit={mode === 'speed' ? 'км/ч' : 'с на 100 м'} />
+
+          <div className="text-[11px] text-[var(--muted-2)] mt-2 min-h-[16px]">
+            {hoverS != null ? (
+              <span className="num text-[var(--text)]">
+                {hoverS} м
+                {a.corners.find(c => hoverS >= c.sStart && hoverS <= c.sEnd)
+                  && ` · ${a.corners.find(c => hoverS >= c.sStart && hoverS <= c.sEnd)!.name}`}
+                {' · '}
+                {a.drivers.map(d => `${name(d)} ${V(d)[hoverS].toFixed(1)} км/ч`).join('   ')}
+              </span>
+            ) : (
+              <>
+                {mode === 'speed' && `Цвет и числа у поворотов — скорость «${name(ref)}» в апексе, км/ч. Наведите на трассу для точного значения.`}
+                {mode === 'delta' && `Красное — где «${name(deltaDriver)}» теряет время относительно «${name(ref)}», зелёное — где выигрывает. Числа у поворотов — потеря в зоне, с.`}
+                {mode === 'lines' && `Реальные траектории: осевая линия плюс измеренное боковое смещение.`}
+              </>
+            )}
           </div>
         </div>
 

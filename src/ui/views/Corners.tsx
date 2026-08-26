@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import type { ViewCtx } from '../App';
 import { TrackMap } from '../TrackMap';
+import { CornerDetail } from './CornerDetail';
 import { delta, num, deltaColor } from '../format';
 
 const METRICS = [
   ['dt', 'потеря времени', 'с'],
-  ['vmin', 'скорость в апексе', 'км/ч'],
+  ['vmin', 'минимальная скорость', 'км/ч'],
   ['vexit', 'скорость на выходе', 'км/ч'],
   ['ventry', 'скорость на входе', 'км/ч'],
   ['brake', 'точка замедления', 'м'],
@@ -16,6 +17,8 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
   const { a, ref, name, color, Z, V } = ctx;
   const [metric, setMetric] = useState<Metric>('dt');
   const [sel, setSel] = useState<number | null>(null);
+  const [pinned, setPinned] = useState<number | null>(null);
+  const shown = pinned ?? sel;
 
   const rows = useMemo(() => a.zones.map((z, i) => {
     const cells = a.drivers.map(d => {
@@ -23,8 +26,10 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
       switch (metric) {
         case 'dt': return { v: zs.tZone - rs.tZone, raw: zs.tZone, d: zs.tZone - rs.tZone };
         case 'vmin': return { v: zs.vMin, raw: zs.vMin, d: zs.vMin - rs.vMin };
-        case 'vexit': return { v: V(d)[Math.round(z.corner.sEnd) % a.grid.length], raw: 0,
-          d: V(d)[Math.round(z.corner.sEnd) % a.grid.length] - V(ref)[Math.round(z.corner.sEnd) % a.grid.length] };
+        case 'vexit': {
+          const ve = V(d)[Math.round(z.corner.sEnd) % a.grid.length];
+          return { v: ve, raw: ve, d: ve - V(ref)[Math.round(z.corner.sEnd) % a.grid.length] };
+        }
         case 'ventry': return { v: zs.vEntry, raw: zs.vEntry, d: zs.vEntry - rs.vEntry };
         case 'brake': {
           let dd = zs.sBrake - rs.sBrake;
@@ -49,23 +54,23 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
 
   const mapValues = useMemo(() => {
     const out = new Float64Array(a.grid.length);
-    if (sel == null) return V(ref);
-    const z = a.zones[sel];
+    if (shown == null) return V(ref);
+    const z = a.zones[shown];
     for (let i = 0; i < out.length; i++) {
       const inZone = z.sStart < z.sEnd ? i >= z.sStart && i <= z.sEnd : i >= z.sStart || i <= z.sEnd;
       out[i] = inZone ? 1 : 0;
     }
     return out;
-  }, [sel, a, ref, V]);
+  }, [shown, a, ref, V]);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_360px] items-start">
+    <div className="grid gap-4 xl:grid-cols-[1fr_470px] items-start">
       <div className="panel overflow-hidden">
         <div className="p-4 pb-3 flex items-center justify-between gap-3 flex-wrap">
           <div>
             <div className="text-[13px] font-medium">Разбор по поворотам</div>
             <div className="text-[11px] text-[var(--muted)]">
-              Зоны покрывают круг целиком, поэтому потери суммируются точно в дельту круга
+              Зоны покрывают круг целиком — потери суммируются точно в дельту круга. Клик по строке открывает разбор поворота
             </div>
           </div>
           <div className="flex rounded-lg border border-[var(--line)] overflow-hidden text-[11px]">
@@ -99,9 +104,14 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
                 <tr key={i}
                   onMouseEnter={() => { setSel(i); ctx.setCursorS(z.corner.sApex); }}
                   onMouseLeave={() => { setSel(null); ctx.setCursorS(null); }}
-                  className={`border-t border-[var(--line-soft)] transition ${sel === i ? 'bg-[var(--panel-2)]' : ''}`}>
+                  onClick={() => setPinned(p => (p === i ? null : i))}
+                  className={`border-t border-[var(--line-soft)] transition cursor-pointer
+                    ${pinned === i ? 'bg-[var(--panel-2)]' : sel === i ? 'bg-white/[0.03]' : ''}`}>
                   <td className="px-4 py-2 sticky left-0 bg-inherit">
-                    <span className="font-medium">{z.corner.name}</span>
+                    <span className="font-medium"
+                      style={pinned === i ? { boxShadow: 'inset 0 -1px 0 currentColor' } : undefined}>
+                      {z.corner.name}
+                    </span>
                     <span className="text-[var(--muted-2)] ml-1.5 text-[10px]">{z.corner.dir === 'L' ? 'лев' : 'прав'}</span>
                   </td>
                   <td className="px-2 py-2 text-right text-[var(--muted)]">{z.corner.radius.toFixed(0)} м</td>
@@ -120,7 +130,9 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
                         )}
                         <span className="relative">
                           {isRef
-                            ? <span>{metric === 'dt' ? '—' : num(c.v, digits)}</span>
+                            ? <span className="text-[var(--muted)]">
+                                {metric === 'dt' ? `${c.raw.toFixed(3)} с` : num(c.v, digits)}
+                              </span>
                             : <>
                               {metric !== 'dt' && <span className="text-[var(--muted)] mr-1.5">{num(c.v, digits)}</span>}
                               <span style={{ color: Math.abs(c.d) < 1e-9 ? 'var(--muted)' : good ? 'var(--good)' : 'var(--bad)' }}>
@@ -148,18 +160,20 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
         </div>
       </div>
 
-      <div className="panel p-4 lg:sticky lg:top-[122px]">
-        <div className="text-[13px] font-medium mb-1">
-          {sel != null ? a.zones[sel].corner.name : 'Наведите на строку'}
-        </div>
-        <div className="text-[11px] text-[var(--muted)] mb-3">
-          {sel != null
-            ? `${a.zones[sel].corner.sStart.toFixed(0)}–${a.zones[sel].corner.sEnd.toFixed(0)} м · радиус ${a.zones[sel].corner.radius.toFixed(0)} м`
-            : 'Поворот подсветится на карте'}
-        </div>
-        <TrackMap a={a} mode={sel != null ? 'delta' : 'speed'} values={mapValues}
-          cursorS={ctx.cursorS} height={300} />
+      <div className="xl:sticky xl:top-[122px]">
+        {shown != null ? (
+          <CornerDetail ctx={ctx} zoneIndex={shown} />
+        ) : (
+          <div className="panel p-4">
+            <div className="text-[13px] font-medium mb-1">Наведите на строку</div>
+            <div className="text-[11px] text-[var(--muted)] mb-3">
+              Кликните, чтобы закрепить разбор поворота и не терять его при движении мышью
+            </div>
+            <TrackMap a={a} mode="speed" values={mapValues} cursorS={ctx.cursorS} height={300} />
+          </div>
+        )}
       </div>
+
     </div>
   );
 }

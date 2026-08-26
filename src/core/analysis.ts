@@ -84,13 +84,16 @@ export function zoneStats(tr: LapTrace, zones: Zone[], grid: Float64Array): Zone
     let tZone = tr.t[b] - tr.t[a]; if (tZone < 0) tZone += tr.t[N - 1];
     let vMin = Infinity, iMin = ca;
     walk(ca, cb, i => { if (tr.v[i] < vMin) { vMin = tr.v[i]; iMin = i; } });
-    // начало торможения: последний максимум скорости перед апексом внутри зоны
+    // начало торможения: последний максимум скорости перед апексом внутри зоны.
+    // Если максимум пришёлся на самый край зоны — карт въехал в неё уже замедляясь,
+    // и точки замедления внутри зоны просто нет. Число тут было бы враньём.
     let vPeak = -1, iPeak = a;
     walk(a, iMin, i => { if (tr.v[i] >= vPeak) { vPeak = tr.v[i]; iPeak = i; } });
+    const brakeUndefined = iPeak === a || iPeak === (a + 1) % N;
     return {
       zone: z, tZone, vMin,
       vEntry: tr.v[ca], vExit: tr.v[cb],
-      sBrake: grid[iPeak], latApex: tr.lat[ap],
+      sBrake: brakeUndefined ? NaN : grid[iPeak], latApex: tr.lat[ap],
     };
   });
 }

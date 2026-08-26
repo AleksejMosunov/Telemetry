@@ -2,6 +2,7 @@ import { parseAimCsv, ch, type Session } from './parse';
 import { makeProjector, project } from './geo';
 import { splitLaps, cleanLaps, buildCenterline, detectCorners, type Corner, type Lap } from './track';
 import { makeGrid } from './align';
+import { zonePathLengths } from './geometry';
 import { buildLapTrace, buildZones, zoneStats, type Zone, type ZoneStats } from './analysis';
 
 export interface LapInfo {
@@ -19,6 +20,8 @@ export interface DriverStats {
 
 export interface DriverResult {
   id: string; name: string; fileName: string;
+  /** Устойчивый ключ заезда — по нему запоминается заданное пользователем имя пилота. */
+  fingerprint: string;
   meta: Record<string, string>;
   laps: LapInfo[];
   cleanIdx: number[];        // индексы в laps
@@ -27,6 +30,11 @@ export interface DriverResult {
   /** траектории чистых кругов на общей сетке дистанции */
   traces: { lapIndex: number; v: Float64Array; lat: Float64Array; t: Float64Array }[];
   medV: Float64Array; medT: Float64Array; medLat: Float64Array;
+  /** разброс траектории по кругам, м (СКО на каждом метре) */
+  medLatSd: Float64Array;
+  /** длина усреднённой траектории, м — считается по реальным кругам, а не по сглаженной линии */
+  medPathByZone: Float64Array;
+  bestPathByZone: Float64Array;
   bestV: Float64Array; bestT: Float64Array; bestLat: Float64Array;
   zoneMed: ZoneStats[]; zoneBest: ZoneStats[];
   /** [круг][зона] — время в зоне, для тепловой карты стабильности */
@@ -40,6 +48,18 @@ export interface Analysis {
   grid: Float64Array;
   drivers: DriverResult[];
   warnings: string[];
+}
+
+/** "3:31 PM" -> "15:31" */
+export function time24(v: string | undefined): string {
+  if (!v) return '';
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i.exec(v.trim());
+  if (!m) return v;
+  let h = Number(m[1]);
+  const ap = m[3]?.toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  return `${String(h).padStart(2, '0')}:${m[2]}`;
 }
 
 const PALETTE = ['#4dabf7', '#ff922b', '#51cf66', '#e599f7', '#ffd43b', '#ff6b6b'];
@@ -95,6 +115,19 @@ function medianTimeTrace(traces: { t: Float64Array }[], N: number): Float64Array
   for (let i = 1; i < N; i++) {
     for (let k = 0; k < traces.length; k++) buf[k] = traces[k].t[i] - traces[k].t[i - 1];
     out[i] = out[i - 1] + med(buf);
+  }
+  return out;
+}
+
+function spread(traces: Float64Array[], N: number): Float64Array {
+  const out = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    let m = 0;
+    for (const t of traces) m += t[i];
+    m /= traces.length || 1;
+    let v = 0;
+    for (const t of traces) v += (t[i] - m) ** 2;
+    out[i] = Math.sqrt(v / (traces.length || 1));
   }
   return out;
 }
@@ -186,16 +219,26 @@ export function analyze(files: { name: string; text: string }[]): Analysis {
     const bestLap = p.laps.find(l => l.index === bestLapIndex)!;
     const bestFull = buildLapTrace(p.s, bestLap, cl, grid);
 
-    // медианные зоны: берём круг, ближайший к медианному времени
-    const medTime = med(times);
-    const repIdx = cleanInfos.reduce((a, b, i, arr) =>
-      Math.abs(arr[i].time - medTime) < Math.abs(arr[a].time - medTime) ? i : a, 0);
-    const repLap = p.laps.find(l => l.index === cleanInfos[repIdx].index)!;
+    const medLatSd = spread(traces.map(t => t.lat), N);
+
+    // Усреднённый круг — синтетический: медиана по каждому метру.
+    // Раньше зоны считались по одному «представительному» реальному кругу,
+    // из-за чего таблица поворотов расходилась с графиками.
+    const medTrace = { lap: bestLap, t: medT, v: medV, lat: medLat, pathLength: 0 };
+
+    // Длину траектории в зоне усредняем по РЕАЛЬНЫМ кругам: усреднение самой линии
+    // сглаживает рыскание, а именно оно и даёт лишние метры.
+    const zonePathPerLap = traces.map(tr => zonePathLengths(cl, tr.lat, zones, grid));
+    const medPathByZone = new Float64Array(zones.length);
+    for (let z = 0; z < zones.length; z++) medPathByZone[z] = med(zonePathPerLap.map(r => r[z]));
+    const bestPathByZone = zonePathLengths(cl, bestFull.lat, zones, grid);
 
     return {
       id: `d${di}`,
+      fingerprint: [p.s.meta['Racer'], p.s.meta['Date'], p.s.meta['Time'],
+        p.s.meta['Duration'], p.s.meta['Vehicle']].filter(Boolean).join('|'),
       name: p.s.meta['Racer'] && parsed.length > 1
-        ? `${p.s.meta['Racer']} · ${p.s.meta['Time'] ?? p.file.name}`
+        ? `${p.s.meta['Racer']} · ${time24(p.s.meta['Time']) || p.file.name}`
         : (p.s.meta['Racer'] || p.file.name),
       fileName: p.file.name,
       meta: p.s.meta,
@@ -213,7 +256,8 @@ export function analyze(files: { name: string; text: string }[]): Analysis {
       traces,
       medV, medT, medLat,
       bestV: bestTrace.v, bestT: bestTrace.t, bestLat: bestTrace.lat,
-      zoneMed: zoneStats(buildLapTrace(p.s, repLap, cl, grid), zones, grid),
+      medLatSd, medPathByZone, bestPathByZone,
+      zoneMed: zoneStats(medTrace, zones, grid),
       zoneBest: zoneStats(bestFull, zones, grid),
       zoneByLap,
     };
