@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { prepareSession, type PreparedSession } from '../../data/upload';
-import { commitSession, createConfig, createDriver, aliasHint, findDuplicate, type SessionRow } from '../../data/api';
+import { commitSession, createConfig, createDriver, aliasHistory, findDuplicate, type SessionRow } from '../../data/api';
 import { matchTracks, findConfig } from '../../core/trackid';
 import type { CloudState } from './state';
 import { Shell } from './Auth';
@@ -17,6 +17,8 @@ interface Pending {
   venueName: string;
   note: string;
   driverId: string;
+  /** с кем раньше связывали это же значение Racer — показываем, но не подставляем */
+  hintIds: string[];
   newTrackName: string;
   newConfigName: string;
   state: 'ready' | 'saving' | 'done' | 'error';
@@ -51,7 +53,11 @@ export function Upload({ cloud, files, onClose, onDone }: {
             if (matchTracks(p.signature, c.signature).sameVenue) { venueId = c.trackId; venueName = c.trackName; break; }
           }
         }
-        const hint = cloud.team ? await aliasHint(cloud.team.id, p.racer) : null;
+        // Подставляем пилота только при точном совпадении имени: если логгер
+        // подписан именем человека, это надёжно. Всё остальное — лишь подсказка.
+        const exact = cloud.drivers.find(
+          d => d.name.trim().toLowerCase() === p.racer.trim().toLowerCase());
+        const hintIds = cloud.team ? await aliasHistory(cloud.team.id, p.racer) : [];
         out.push({
           key: `${f.name}|${f.size}|${f.lastModified}`,
           p, duplicate: dup,
@@ -62,7 +68,8 @@ export function Upload({ cloud, files, onClose, onDone }: {
             : venueId
               ? `Площадка «${venueName}» знакома, но конфигурация новая`
               : 'Новая трасса',
-          driverId: hint ?? '',
+          driverId: exact?.id ?? '',
+          hintIds: hintIds.filter(id => id !== exact?.id),
           newTrackName: venueId ? venueName : '',
           newConfigName: hit ? '' : 'Основная',
           state: 'ready',
@@ -71,14 +78,14 @@ export function Upload({ cloud, files, onClose, onDone }: {
         out.push({
           key: f.name, p: null as unknown as PreparedSession, duplicate: null,
           configId: null, venueId: null, venueName: '', note: '',
-          driverId: '', newTrackName: '', newConfigName: '',
+          driverId: '', hintIds: [], newTrackName: '', newConfigName: '',
           state: 'error', error: e instanceof Error ? e.message : String(e),
         });
       }
     }
     setProgress('');
     setItems(out);
-  }, [files, cloud.team, cloud.configs]);
+  }, [files, cloud.team, cloud.configs, cloud.drivers]);
 
   useEffect(() => {
     if (started.current) return;
@@ -230,6 +237,25 @@ function Row({ it, cloud, patch }: {
               {cloud.drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </label>
+
+          {!it.driverId && it.hintIds.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] text-[var(--muted-2)]">раньше «{it.p.racer}» ставили</span>
+              <div className="flex gap-1 flex-wrap py-0.5">
+                {it.hintIds.map(id => {
+                  const d = cloud.drivers.find(x => x.id === id);
+                  if (!d) return null;
+                  return (
+                    <button key={id} onClick={() => patch(it.key, { driverId: id })}
+                      className="px-2 py-1 rounded border border-[var(--line)] text-[11px]
+                        text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--panel-2)] transition">
+                      {d.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {it.configId ? (
             <div className="flex flex-col gap-1">

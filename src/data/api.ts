@@ -94,17 +94,20 @@ export async function createDriver(teamId: string, name: string): Promise<Driver
 }
 
 /**
- * Подсказка по полю Racer из логгера. Возвращает пилота, только если это
- * значение до сих пор связывали ровно с ним одним: в реальных логах Racer
- * бывает названием карта и совпадает у разных людей, поэтому как правило
- * такая подсказка не годится — только как предположение.
+ * С кем раньше связывали это значение поля Racer.
+ *
+ * Подставлять пилота по такой памяти нельзя: в реальных логах Racer бывает
+ * названием карта — «Marafon» стоит у всех пилотов команды. Память с одной
+ * записью тогда не подсказка, а готовая ошибка, которую легко не заметить.
+ * Поэтому возвращаем список и показываем его как предположение, а выбор
+ * оставляем человеку.
  */
-export async function aliasHint(teamId: string, alias: string): Promise<string | null> {
-  if (!alias) return null;
+export async function aliasHistory(teamId: string, alias: string): Promise<string[]> {
+  if (!alias) return [];
   const { data, error } = await supabase()
     .from('driver_aliases').select('driver_id').eq('team_id', teamId).eq('alias', alias);
   fail('Не удалось прочитать привязки', error);
-  return data && data.length === 1 ? (data[0].driver_id as string) : null;
+  return (data ?? []).map(r => r.driver_id as string);
 }
 
 async function rememberAlias(teamId: string, alias: string, driverId: string) {
@@ -204,17 +207,26 @@ export async function listSessions(teamId: string): Promise<SessionRow[]> {
   return ((data ?? []) as unknown as RawSession[]).map(toSessionRow);
 }
 
-/** Уже загружен ли такой заезд: по содержимому файла или по отпечатку сессии. */
+/**
+ * Уже загружен ли такой заезд: по содержимому файла или по отпечатку сессии.
+ *
+ * Два отдельных запроса, а не один через .or(): отпечаток содержит дату вида
+ * "Sunday, August 16, 2026", а PostgREST режет выражение фильтра по запятым
+ * и на таком значении спотыкается.
+ */
 export async function findDuplicate(
   teamId: string, contentHash: string, fingerprint: string,
 ): Promise<SessionRow | null> {
-  const or = [`content_hash.eq.${contentHash}`];
-  if (fingerprint) or.push(`fingerprint.eq.${fingerprint}`);
-  const { data, error } = await supabase()
-    .from('sessions').select(SESSION_COLS).eq('team_id', teamId).or(or.join(',')).limit(1);
-  fail('Не удалось проверить на повтор', error);
-  const rows = (data ?? []) as unknown as RawSession[];
-  return rows.length ? toSessionRow(rows[0]) : null;
+  const lookup = async (column: string, value: string) => {
+    const { data, error } = await supabase()
+      .from('sessions').select(SESSION_COLS)
+      .eq('team_id', teamId).eq(column, value).limit(1);
+    fail('Не удалось проверить на повтор', error);
+    const rows = (data ?? []) as unknown as RawSession[];
+    return rows.length ? toSessionRow(rows[0]) : null;
+  };
+  return (await lookup('content_hash', contentHash))
+    ?? (fingerprint ? await lookup('fingerprint', fingerprint) : null);
 }
 
 /** Заливка заезда. Строку пишем первой: уникальный индекс отсечёт повтор
