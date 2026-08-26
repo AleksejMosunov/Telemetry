@@ -324,9 +324,15 @@ export function analyzeSessions(
     return {
       id: `d${di}`,
       fingerprint: fp,
-      name: p.s.meta['Racer'] && parsed.length > 1
-        ? `${p.s.meta['Racer']} · ${time24(p.s.meta['Time']) || p.s.sourceName}`
-        : (p.s.meta['Racer'] || p.s.sourceName),
+      // Привязка пилота в библиотеке важнее поля Racer: в прокате оно хранит
+      // имя аккаунта хронометража («Marafon»), а не того, кто ехал.
+      name: (() => {
+        const own = p.s.displayName?.trim();
+        const base = own || p.s.meta['Racer'] || p.s.sourceName;
+        return (own || p.s.meta['Racer']) && parsed.length > 1
+          ? `${base} · ${time24(p.s.meta['Time']) || p.s.sourceName}`
+          : base;
+      })(),
       fileName: p.s.sourceName,
       meta: p.s.meta,
       laps: lapInfos,

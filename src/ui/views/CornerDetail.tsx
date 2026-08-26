@@ -6,6 +6,8 @@ import { zoneIndices, lineXY } from '../TrackMap';
 import { Chart } from '../Chart';
 import { delta, num, deltaColor } from '../format';
 
+const fmtSpeedV = (v: number) => `${num(v)} км/ч`;
+
 /** Крупный план одного поворота: реальные траектории пилотов, апекс, точки замедления. */
 function CornerMap({ ctx, zoneIndex, height = 260 }: { ctx: ViewCtx; zoneIndex: number; height?: number }) {
   const { a, color, LAT, LATSD, Z, V } = ctx;
@@ -224,7 +226,7 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
 
       <div>
         <div className="text-[11px] text-[var(--muted)] mb-1">Скорость по зоне, км/ч</div>
-        <Chart data={chart.data} series={chart.series} height={140} bands={bands} />
+        <Chart data={chart.data} series={chart.series} height={140} bands={bands} fmt={fmtSpeedV} />
       </div>
 
       <table className="w-full text-[12px] num">

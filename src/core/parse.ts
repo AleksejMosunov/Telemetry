@@ -15,6 +15,8 @@ export interface Session {
   columns: Float64Array[];
   n: number;
   sourceName: string;
+  /** Имя пилота, пришедшее извне (привязка в библиотеке). Сильнее метаданных CSV. */
+  displayName?: string;
 }
 
 function splitCsvLine(line: string): string[] {

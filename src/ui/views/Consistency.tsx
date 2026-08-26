@@ -125,6 +125,8 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
   const bestLapIndex = inPlay.reduce((p, q) => (q.time < p.time ? q : p), inPlay[0]).lapIndex;
   const maxTotal = Math.max(...inPlay.map(l => Math.abs(l.total)), 0.001);
   const cut = exclOf(dc.d);
+  // 102 — колонка круга, 32 клетка + 3 зазор, 8 + 54 — полоса «круг целиком»
+  const gridW = 102 + 3 + dc.zones.length * 35 - 3 + 8 + 54;
   const nCut = dc.rows.filter(r => r.excluded).length;
 
   const toggle = (lapIndex: number) => {
@@ -172,7 +174,9 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
 
       <div className="grid gap-5 xl:grid-cols-[auto_1fr] items-start">
         <div className="overflow-x-auto">
-          <div className="inline-block">
+          {/* ширина ровно по сетке: иначе длинная подпись снизу растягивает колонку
+              и между картой и правой панелью зияет пустота */}
+          <div style={{ width: gridW }}>
             <div className="flex gap-[3px] mb-1" style={{ paddingLeft: 106 }}>
               {dc.zones.map(z => (
                 <div key={z.z} className="text-[10px] text-[var(--muted-2)] text-center num" style={{ width: 32 }}>

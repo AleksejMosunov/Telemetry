@@ -2,14 +2,21 @@ import { useMemo } from 'react';
 import type uPlot from 'uplot';
 import type { ViewCtx } from '../App';
 import { Chart } from '../Chart';
-import { num } from '../format';
+import { delta, num } from '../format';
+
+const fmtSpeed = (v: number) => `${num(v)} км/ч`;
+const fmtDelta = (v: number) => `${delta(v)} с`;
+const fmtOffset = (v: number) => `${num(v, 2)} м`;
 
 export function Traces({ ctx }: { ctx: ViewCtx }) {
   const { a, ref, name, color, V, T, LAT, cursorS, setCursorS } = ctx;
   const xs = useMemo(() => Array.from(a.grid), [a]);
 
   const bands = useMemo(
-    () => a.corners.map(c => ({ from: c.sStart, to: c.sEnd, label: c.name })),
+    () => a.corners.map(c => ({
+      from: c.sStart, to: c.sEnd, label: c.name,
+      sub: c.dir === 'L' ? 'левый' : 'правый',
+    })),
     [a],
   );
 
@@ -65,19 +72,19 @@ export function Traces({ ctx }: { ctx: ViewCtx }) {
         ))}
       </div>
 
-      <Panel title="Скорость" hint="км/ч по дистанции круга; серые полосы — повороты">
+      <Panel title="Скорость" hint="км/ч по дистанции круга; сверху — номера поворотов">
         <Chart data={speed.data} series={speed.series} height={230} yLabel="км/ч"
-          bands={bands} syncKey="tr" onCursor={setCursorS} />
+          bands={bands} bandAxis syncKey="tr" onCursor={setCursorS} fmt={fmtSpeed} xUnit="м" />
       </Panel>
 
       <Panel title={`Накопленная дельта к «${name(ref)}»`} hint="выше нуля — теряет время; наклон показывает, где именно">
         <Chart data={dt.data} series={dt.series} height={200} yLabel="сек"
-          bands={bands} syncKey="tr" onCursor={setCursorS} />
+          bands={bands} bandAxis syncKey="tr" onCursor={setCursorS} fmt={fmtDelta} xUnit="м" />
       </Panel>
 
       <Panel title="Боковое смещение от осевой линии" hint="плюс — левее опорной траектории; расхождение линий = разные траектории">
         <Chart data={lat.data} series={lat.series} height={180} yLabel="м"
-          bands={bands} syncKey="tr" onCursor={setCursorS} />
+          bands={bands} bandAxis syncKey="tr" onCursor={setCursorS} fmt={fmtOffset} xUnit="м" />
       </Panel>
     </div>
   );

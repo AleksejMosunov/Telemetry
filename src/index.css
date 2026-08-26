@@ -39,6 +39,33 @@ body {
 .u-legend { display: none; }
 .u-cursor-x, .u-cursor-y { border-color: #3a4152; }
 
+.u-tip.u-off, .u-band-hl.u-off { display: none; }
+
+/* подсказка у курсора: значения читаются на месте, без похода глазами наверх */
+.u-tip {
+  position: absolute; top: 0; left: 0; z-index: 5; pointer-events: none;
+  background: rgba(13, 16, 22, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 7px;
+  font-size: 11px; line-height: 1.5; white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  font-variant-numeric: tabular-nums;
+}
+.u-tip-h { color: var(--muted); margin-bottom: 2px; }
+.u-tip-b { color: var(--text); font-weight: 600; }
+.u-tip-r { display: flex; align-items: center; gap: 6px; }
+.u-tip-r i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.u-tip-n { color: var(--muted); max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+.u-tip-r b { margin-left: auto; font-weight: 600; }
+
+/* зона поворота под курсором */
+.u-band-hl {
+  position: absolute; top: 0; height: 100%; z-index: 1; pointer-events: none;
+  background: rgba(255, 255, 255, 0.05);
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #262c39; border-radius: 6px; border: 2px solid var(--bg); }

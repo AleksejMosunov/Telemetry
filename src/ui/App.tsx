@@ -20,6 +20,8 @@ export type LapMode = 'median' | 'best';
 export interface Source {
   key: string;
   name: string;
+  /** Имя привязанного пилота из библиотеки — сильнее поля Racer в файле. */
+  displayName?: string;
   file?: File;
   row?: SessionRow;
 }
@@ -139,6 +141,9 @@ export function App() {
             : { name: src.name, packed: await downloadSamples(src.row!) };
           cache.set(src.key, got);
         }
+        // имя пилота могло смениться в библиотеке — обновляем и у кешированных байтов
+        got.name = src.name;
+        got.displayName = src.displayName;
         return got;
       }));
       const w = new Worker(new URL('../worker.ts', import.meta.url), { type: 'module' });
@@ -212,6 +217,7 @@ export function App() {
       runAnalysis(rows.map(r => ({
         key: `c:${r.id}`,
         name: r.driverName ?? r.meta['Racer'] ?? 'заезд',
+        displayName: r.driverName ?? undefined,
         row: r,
       })), refIdRef.current, merged);
     } catch (e) {
@@ -250,15 +256,36 @@ export function App() {
     if (rows.length) openFromLibrary(rows);
   }, [cloud.ready, cloud.signedIn, cloud.sessions, a, busy, openFromLibrary]);
 
+  /** Привязка пилота в библиотеке применяется к уже открытым заездам сразу:
+   *  байты лежат в кеше, пересчёт идёт без повторной загрузки. */
+  useEffect(() => {
+    const list = sourcesRef.current;
+    if (!list.length || busy) return;
+    const byFp = new Map(
+      cloud.sessions.filter(s => s.fingerprint && s.driverName).map(s => [s.fingerprint!, s.driverName!]),
+    );
+    let changed = false;
+    const next = list.map(s => {
+      const nm = s.row?.fingerprint ? byFp.get(s.row.fingerprint) : undefined;
+      if (!nm || nm === s.displayName) return s;
+      changed = true;
+      return { ...s, name: nm, displayName: nm };
+    });
+    if (changed) runAnalysis(next, refIdRef.current);
+  }, [cloud.sessions, busy, runAnalysis]);
+
   gatedRef.current = cloud.enabled && cloud.ready && !cloud.signedIn;
 
-  const ctx: ViewCtx | null = useMemo(() => {
+  // Курсор меняется на каждое движение мыши. Если бы он входил в этот useMemo,
+  // все функции ctx получали бы новую identity, а вслед за ними пересчитывались
+  // ряды графиков — отсюда рывки. Поэтому курсор подмешивается отдельно.
+  const base = useMemo((): Omit<ViewCtx, 'cursorS' | 'setCursorS'> | null => {
     if (!a) return null;
     const ref = a.drivers.find(d => d.id === refId) ?? a.drivers[0];
     refIdRef.current = ref.fingerprint;
     const idx = (d: DriverResult) => a.drivers.indexOf(d);
     return {
-      a, ref, refId: ref.id, lapMode, cursorS, setCursorS, busy,
+      a, ref, refId: ref.id, lapMode, busy,
       name: (d) => (names[d.id]?.trim() ? names[d.id].trim() : d.name),
       color: (d) => driverColor(idx(d)),
       V: (d) => (lapMode === 'best' ? d.bestV : d.medV),
@@ -270,7 +297,12 @@ export function App() {
       exclOf: (d) => excl[d.fingerprint] ?? [],
       setExcl,
     };
-  }, [a, refId, lapMode, cursorS, names, excl, setExcl, busy]);
+  }, [a, refId, lapMode, names, excl, setExcl, busy]);
+
+  const ctx: ViewCtx | null = useMemo(
+    () => (base ? { ...base, cursorS, setCursorS } : null),
+    [base, cursorS],
+  );
 
   const cutCount = a ? a.drivers.reduce((n, d) => n + d.laps.filter(l => l.excluded).length, 0) : 0;
   /** Облако настроено, но пользователь не вошёл: работа с файлами закрыта.

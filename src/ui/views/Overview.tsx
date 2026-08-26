@@ -5,6 +5,8 @@ import type { DriverResult } from '../../core/pipeline';
 import { TrackMap, MapLegend, type MapMode } from '../TrackMap';
 import { Chart } from '../Chart';
 import { lapTime, delta, num, deltaColor } from '../format';
+
+const fmtLapNo = (v: number) => `круг ${v}`;
 import { deltaRate } from '../../core/analysis';
 
 export function Overview({ ctx }: { ctx: ViewCtx }) {
@@ -128,7 +130,8 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
         <div className="panel p-4">
           <div className="text-[13px] font-medium mb-1">Время круга по ходу заезда</div>
           <div className="text-[11px] text-[var(--muted)] mb-2">Только чистые круги; заездной и выбросы отфильтрованы</div>
-          <Chart data={lapChart.data} series={lapChart.series} height={392} yLabel="сек" />
+          <Chart data={lapChart.data} series={lapChart.series} height={392} yLabel="сек"
+            fmt={lapTime} xFmt={fmtLapNo} />
         </div>
       </div>
     </div>
