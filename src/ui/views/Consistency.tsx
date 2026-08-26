@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ViewCtx } from '../App';
-import { plural } from '../App';
 import type { DriverResult, LapInfo } from '../../core/pipeline';
-import { lapTime, delta, num } from '../format';
+import { lapTime, delta, num, plural } from '../format';
 
 interface ZoneStat {
   z: number; name: string;

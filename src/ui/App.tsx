@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Analysis, DriverResult } from '../core/pipeline';
 import { driverColor } from '../core/pipeline';
-import { lapTime } from './format';
+import { lapTime, plural } from './format';
+import type { WorkerSource } from '../worker';
+import { downloadSamples, setExclusions, listExclusions, type SessionRow } from '../data/api';
+import { useCloud } from './cloud/state';
+import { Auth } from './cloud/Auth';
+import { Library } from './cloud/Library';
 import { Overview } from './views/Overview';
 import { Corners } from './views/Corners';
 import { Traces } from './views/Traces';
@@ -10,6 +15,15 @@ import { Replay } from './views/Replay';
 import { Findings } from './views/Findings';
 
 export type LapMode = 'median' | 'best';
+
+/** Заезд может прийти с диска или из библиотеки — дальше путь один и тот же. */
+export interface Source {
+  key: string;
+  name: string;
+  file?: File;
+  row?: SessionRow;
+}
+const fileKey = (f: File) => `f:${f.name}|${f.size}|${f.lastModified}`;
 
 /** Снятые вручную круги: отпечаток заезда -> номера кругов. */
 export type Excluded = Record<string, number[]>;
@@ -80,41 +94,53 @@ export function App() {
   const [names, setNames] = useState<Record<string, string>>({});
   const [excl, setExclState] = useState<Excluded>(loadExcluded);
   const [drag, setDrag] = useState(false);
-  const [files, setFiles] = useState<File[]>([]);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [panel, setPanel] = useState<'none' | 'auth' | 'library'>('none');
   const input = useRef<HTMLInputElement>(null);
   const refIdRef = useRef<string | undefined>(undefined);
   const exclRef = useRef<Excluded>(excl);
+  const cloud = useCloud();
 
-  const filesRef = useRef<File[]>([]);
-  /** Текст уже прочитанных файлов: пересчёт после снятия круга не должен
-   *  заново поднимать с диска десятки мегабайт. */
-  const textCache = useRef(new Map<string, string>());
+  const sourcesRef = useRef<Source[]>([]);
+  /** Уже прочитанное содержимое: пересчёт после снятия круга не должен
+   *  заново поднимать с диска десятки мегабайт и тем более лезть в сеть. */
+  const dataCache = useRef(new Map<string, WorkerSource>());
+  /** отпечаток заезда -> id в библиотеке: по нему снятые круги пишутся в базу */
+  const cloudIdByFp = useRef(new Map<string, string>());
   const MAX = 6;
-  const fileKey = (f: File) => `${f.name}|${f.size}|${f.lastModified}`;
 
   /** Пересчёт всего набора. Опорный пилот держится за отпечаток заезда,
    *  иначе он бы прыгал при каждом добавлении файла. */
-  const runAnalysis = useCallback(async (fileList: File[], keepRefFp?: string, excluded?: Excluded) => {
-    filesRef.current = fileList;
-    setFiles(fileList);
-    if (!fileList.length) { setA(null); setErr(null); return; }
+  const runAnalysis = useCallback(async (list: Source[], keepRefFp?: string, excluded?: Excluded) => {
+    sourcesRef.current = list;
+    setSources(list);
+    if (!list.length) { setA(null); setErr(null); return; }
     setBusy(true); setErr(null);
     try {
-      const cache = textCache.current;
-      const keys = fileList.map(fileKey);
-      for (const k of [...cache.keys()]) if (!keys.includes(k)) cache.delete(k);
-      const payload = await Promise.all(fileList.map(async (f, i) => {
-        let text = cache.get(keys[i]);
-        if (text == null) { text = await f.text(); cache.set(keys[i], text); }
-        return { name: f.name, text };
+      const cache = dataCache.current;
+      const keys = new Set(list.map(s => s.key));
+      for (const k of [...cache.keys()]) if (!keys.has(k)) cache.delete(k);
+      const payload = await Promise.all(list.map(async (src) => {
+        let got = cache.get(src.key);
+        if (!got) {
+          got = src.file
+            ? { name: src.name, csv: await src.file.text() }
+            : { name: src.name, packed: await downloadSamples(src.row!) };
+          cache.set(src.key, got);
+        }
+        return got;
       }));
       const w = new Worker(new URL('../worker.ts', import.meta.url), { type: 'module' });
       const result = await new Promise<Analysis>((res, rej) => {
         w.onmessage = (e) => (e.data.ok ? res(e.data.result) : rej(new Error(e.data.error)));
-        w.onerror = () => rej(new Error('Сбой при разборе файлов'));
-        w.postMessage({ files: payload, excluded: excluded ?? exclRef.current });
+        w.onerror = () => rej(new Error('Сбой при разборе заездов'));
+        w.postMessage({ sources: payload, excluded: excluded ?? exclRef.current });
       });
       w.terminate();
+      // Заезды из библиотеки помним по отпечатку: снятые круги хранятся в базе.
+      cloudIdByFp.current = new Map(
+        list.filter(s => s.row?.fingerprint).map(s => [s.row!.fingerprint!, s.row!.id]),
+      );
       setA(result);
       const stored = loadNames();
       setNames(Object.fromEntries(result.drivers.map(d => [d.id, stored[d.fingerprint] ?? ''])));
@@ -131,27 +157,54 @@ export function App() {
     exclRef.current = next;
     setExclState(next);
     persistExcluded(next);
-    runAnalysis(filesRef.current, refIdRef.current, next);
+    // Для заездов из библиотеки снятые круги общие для команды — пишем в базу.
+    for (const [fp, id] of cloudIdByFp.current) {
+      setExclusions(id, next[fp] ?? []).catch(e => setErr(String(e)));
+    }
+    runAnalysis(sourcesRef.current, refIdRef.current, next);
   }, [runAnalysis]);
 
   const setExcl = useCallback((d: DriverResult, indices: number[]) => {
     applyExcl({ ...exclRef.current, [d.fingerprint]: [...indices].sort((x, y) => x - y) });
   }, [applyExcl]);
 
-  /** Новые файлы добавляются к уже загруженным, а не заменяют их. */
-  const addFiles = useCallback((incoming: File[]) => {
-    const csv = incoming.filter(f => /\.csv$/i.test(f.name));
-    if (!csv.length) { setErr('Нужны CSV-файлы, выгруженные из RaceStudio 3'); return; }
-    const have = new Set(filesRef.current.map(fileKey));
-    const fresh = csv.filter(f => !have.has(fileKey(f)));
-    if (!fresh.length) { setErr('Эти заезды уже загружены'); return; }
-    const next = [...filesRef.current, ...fresh];
+  /** Новые заезды добавляются к уже открытым, а не заменяют их. */
+  const addSources = useCallback((incoming: Source[]) => {
+    const have = new Set(sourcesRef.current.map(s => s.key));
+    const fresh = incoming.filter(s => !have.has(s.key));
+    if (!fresh.length) { setErr('Эти заезды уже открыты'); return; }
+    const next = [...sourcesRef.current, ...fresh];
     if (next.length > MAX) {
-      setErr(`Загружено ${filesRef.current.length}, добавляется ${fresh.length} — максимум ${MAX} заездов за раз`);
+      setErr(`Открыто ${sourcesRef.current.length}, добавляется ${fresh.length} — максимум ${MAX} заездов`);
       return;
     }
     setErr(null);
     runAnalysis(next, refIdRef.current);
+  }, [runAnalysis]);
+
+  const addFiles = useCallback((incoming: File[]) => {
+    const csv = incoming.filter(f => /\.csv$/i.test(f.name));
+    if (!csv.length) { setErr('Нужны CSV-файлы, выгруженные из RaceStudio 3'); return; }
+    addSources(csv.map(f => ({ key: fileKey(f), name: f.name, file: f })));
+  }, [addSources]);
+
+  /** Открыть заезды из библиотеки: подтягиваем и снятые круги, они общие. */
+  const openFromLibrary = useCallback(async (rows: SessionRow[]) => {
+    setPanel('none');
+    try {
+      const fromDb = await listExclusions(rows.map(r => r.id));
+      const merged = { ...exclRef.current };
+      for (const r of rows) if (r.fingerprint) merged[r.fingerprint] = fromDb[r.id] ?? [];
+      exclRef.current = merged;
+      setExclState(merged);
+      runAnalysis(rows.map(r => ({
+        key: `c:${r.id}`,
+        name: r.driverName ?? r.meta['Racer'] ?? 'заезд',
+        row: r,
+      })), refIdRef.current, merged);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
   }, [runAnalysis]);
 
   useEffect(() => {
@@ -239,7 +292,7 @@ export function App() {
                   <button
                     onClick={e => {
                       e.stopPropagation();
-                      runAnalysis(filesRef.current.filter((_, k) => k !== i), refIdRef.current);
+                      runAnalysis(sourcesRef.current.filter((_, k) => k !== i), refIdRef.current);
                     }}
                     title="Убрать этот заезд"
                     className="w-5 h-5 shrink-0 rounded flex items-center justify-center text-[var(--muted-2)]
@@ -277,9 +330,20 @@ export function App() {
                 ))}
               </div>
             )}
+            {cloud.enabled && cloud.ready && (
+              <button
+                onClick={() => setPanel(cloud.signedIn && cloud.team ? 'library' : 'auth')}
+                title={cloud.signedIn ? 'Библиотека заездов' : 'Войти, чтобы хранить заезды в облаке'}
+                className="px-3 py-1.5 rounded-lg border border-[var(--line)] text-xs
+                  hover:bg-[var(--panel-2)] transition flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: cloud.signedIn ? 'var(--good)' : 'var(--muted-2)' }} />
+                {cloud.signedIn ? `Библиотека${cloud.sessions.length ? ` (${cloud.sessions.length})` : ''}` : 'Войти'}
+              </button>
+            )}
             <button onClick={() => input.current?.click()}
               className="px-3 py-1.5 rounded-lg border border-[var(--line)] text-xs hover:bg-[var(--panel-2)] transition">
-              {a ? `Добавить заезд${files.length ? ` (${files.length}/${MAX})` : ''}` : 'Выбрать файлы'}
+              {a ? `Добавить файл${sources.length ? ` (${sources.length}/${MAX})` : ''}` : 'Выбрать файлы'}
             </button>
             <input ref={input} type="file" accept=".csv" multiple hidden
               onChange={e => {
@@ -311,7 +375,7 @@ export function App() {
         ))}
 
         {busy && !a && <Splash busy />}
-        {!a && !busy && <Splash />}
+        {!a && !busy && <Splash cloud={cloud.enabled && cloud.signedIn} />}
 
         {a && ctx && (
           <div style={{ opacity: busy ? 0.55 : 1, transition: 'opacity .15s' }}>
@@ -325,6 +389,12 @@ export function App() {
         )}
       </main>
 
+      {panel === 'auth' && <Auth cloud={cloud} onClose={() => setPanel('none')} />}
+      {panel === 'library' && (
+        <Library cloud={cloud} max={MAX} picked={sources.filter(s => s.row).map(s => s.row!.id)}
+          onPick={openFromLibrary} onClose={() => setPanel('none')} />
+      )}
+
       {drag && (
         <div className="fixed inset-0 z-50 bg-[#0a0c10]/85 flex items-center justify-center pointer-events-none">
           <div className="text-lg text-[var(--muted)]">Отпустите файлы</div>
@@ -334,14 +404,7 @@ export function App() {
   );
 }
 
-export function plural(n: number, one: string, few: string, many: string) {
-  const a = Math.abs(n) % 100, b = a % 10;
-  if (a > 10 && a < 20) return many;
-  if (b > 1 && b < 5) return few;
-  return b === 1 ? one : many;
-}
-
-function Splash({ busy }: { busy?: boolean }) {
+function Splash({ busy, cloud }: { busy?: boolean; cloud?: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center py-28 text-center">
       {busy ? (
@@ -357,6 +420,11 @@ function Splash({ busy }: { busy?: boolean }) {
             Один файл — анализ заезда, несколько — сравнение пилотов; заезды можно докидывать по одному.
             Трасса и повороты определяются из логов сами, а имена пилотов
             вписываются в шапке и запоминаются на будущее.
+            {cloud && (
+              <span className="block mt-2">
+                Или откройте уже загруженные — кнопка «Библиотека» в шапке.
+              </span>
+            )}
           </div>
         </>
       )}
