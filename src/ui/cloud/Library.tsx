@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import {
   deleteSession, signOut, renameDriver, deleteDriver, reassignSession,
-  renameConfig, deleteConfig, type SessionRow,
+  renameConfig, deleteConfig, createDriver, type SessionRow,
 } from '../../data/api';
 import { clockwise, directionName } from '../../core/trackid';
 import type { CloudState } from './state';
@@ -19,27 +19,55 @@ export function Library({ cloud, picked, onPick, onClose, max }: {
 }) {
   const [tab, setTab] = useState<'sessions' | 'manage'>('sessions');
   const [sel, setSel] = useState<string[]>(picked);
+  const [q, setQ] = useState('');
+  const [cfg, setCfg] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
   const [confirmDel, setConfirmDel] = useState<SessionRow | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    // Границы включительные: «по 16.08» должно захватывать весь этот день.
+    const lo = from ? new Date(from + 'T00:00:00').getTime() : -Infinity;
+    const hi = to ? new Date(to + 'T23:59:59').getTime() : Infinity;
+    return cloud.sessions.filter(s => {
+      if (cfg && s.configId !== cfg) return false;
+      if (needle && !(s.driverName ?? '').toLowerCase().includes(needle)) return false;
+      if (from || to) {
+        if (!s.recordedAt) return false;
+        const t = new Date(s.recordedAt).getTime();
+        if (t < lo || t > hi) return false;
+      }
+      return true;
+    });
+  }, [cloud.sessions, q, cfg, from, to]);
+
+  const dirty = Boolean(q || cfg || from || to);
+  const reset = () => { setQ(''); setCfg(''); setFrom(''); setTo(''); };
+
   // Группируем по конфигурации: сравнивать заезды имеет смысл внутри одной.
   const groups = useMemo(() => {
-    const m = new Map<string, { title: string; dir: string; rows: SessionRow[] }>();
-    for (const s of cloud.sessions) {
+    const m = new Map<string, {
+      track: string; config: string; dir: string; length: number; rows: SessionRow[];
+    }>();
+    for (const s of filtered) {
       const key = s.configId ?? 'нет';
       if (!m.has(key)) {
-        const cfg = cloud.configs.find(c => c.id === s.configId);
+        const c = cloud.configs.find(x => x.id === s.configId);
         m.set(key, {
-          title: s.trackName ? `${s.trackName} · ${s.configName}` : 'Трасса не определена',
-          dir: cfg ? `${clockwise(cfg.signature) ? '↻' : '↺'} ${directionName(cfg.signature)}` : '',
+          track: s.trackName ?? 'Трасса не определена',
+          config: s.configName ?? '',
+          dir: c ? `${clockwise(c.signature) ? '↻' : '↺'} ${directionName(c.signature)}` : '',
+          length: c?.length ?? 0,
           rows: [],
         });
       }
       m.get(key)!.rows.push(s);
     }
-    return [...m.values()];
-  }, [cloud.sessions, cloud.configs]);
+    return [...m.values()].sort((a, b) => a.track.localeCompare(b.track));
+  }, [filtered, cloud.configs]);
 
   const toggle = (id: string) => setSel(v =>
     v.includes(id) ? v.filter(x => x !== id) : v.length >= max ? v : [...v, id]);
@@ -75,8 +103,7 @@ export function Library({ cloud, picked, onPick, onClose, max }: {
         </button>
 
         <div className="flex rounded-lg border border-[var(--line)] overflow-hidden ml-2">
-          {([['sessions', `Заезды${cloud.sessions.length ? ` (${cloud.sessions.length})` : ''}`],
-            ['manage', 'Пилоты и трассы']] as const).map(([id, label]) => (
+          {([['sessions', 'Заезды'], ['manage', 'Пилоты и трассы']] as const).map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)}
               className={`px-3 py-1.5 transition ${tab === id ? 'bg-[var(--panel-2)] text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}>
               {label}
@@ -99,6 +126,34 @@ export function Library({ cloud, picked, onPick, onClose, max }: {
         <div className="text-[12px] text-[#ffb3b3] mb-3 leading-relaxed">{cloud.error}</div>
       )}
 
+      {tab === 'sessions' && cloud.sessions.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap mb-3 pb-3 border-b border-[var(--line-soft)]">
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="пилот"
+            className={`${fld} w-[150px]`} />
+          <select value={cfg} onChange={e => setCfg(e.target.value)} className={fld}>
+            <option value="">все трассы</option>
+            {cloud.configs.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.trackName} · {c.name} ({clockwise(c.signature) ? '↻' : '↺'})
+              </option>
+            ))}
+          </select>
+          <span className="text-[11px] text-[var(--muted-2)]">с</span>
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} className={fld} />
+          <span className="text-[11px] text-[var(--muted-2)]">по</span>
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} className={fld} />
+          {dirty && (
+            <button onClick={reset}
+              className="text-[11px] text-[var(--muted-2)] hover:text-[var(--text)] transition">
+              сбросить
+            </button>
+          )}
+          <span className="ml-auto text-[11px] text-[var(--muted-2)] num">
+            {dirty ? `${filtered.length} из ${cloud.sessions.length}` : `${cloud.sessions.length} ${plural(cloud.sessions.length, 'заезд', 'заезда', 'заездов')}`}
+          </span>
+        </div>
+      )}
+
       {tab === 'manage' ? (
         <Manage cloud={cloud} />
       ) : !cloud.sessions.length ? (
@@ -106,13 +161,28 @@ export function Library({ cloud, picked, onPick, onClose, max }: {
           Библиотека пуста.<br />
           Загрузите первые CSV — дальше они будут открываться отсюда, без перезаливки.
         </div>
+      ) : !filtered.length ? (
+        <div className="py-10 text-center text-[13px] text-[var(--muted)]">
+          Под фильтр ничего не подошло.{' '}
+          <button onClick={reset} className="underline hover:text-[var(--text)]">сбросить</button>
+        </div>
       ) : (
         <div className="flex flex-col gap-4 max-h-[52vh] overflow-y-auto pr-1">
           {groups.map(g => (
-            <div key={g.title}>
-              <div className="flex items-baseline gap-2 mb-1.5 sticky top-0 bg-[var(--panel)] py-1">
-                <span className="text-[11px] text-[var(--muted-2)]">{g.title}</span>
-                {g.dir && <span className="text-[10px] text-[var(--muted-2)]">{g.dir}</span>}
+            <div key={g.track + g.config}>
+              <div className="flex items-baseline gap-2 flex-wrap mb-1.5 sticky top-0 bg-[var(--panel)] py-1">
+                <span className="text-[13px] font-medium">{g.track}</span>
+                <span className="text-[12px] text-[var(--muted)]">{g.config}</span>
+                {g.dir && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded"
+                    style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--muted)' }}>
+                    {g.dir}
+                  </span>
+                )}
+                <span className="text-[10px] text-[var(--muted-2)] num">
+                  {g.length ? `${g.length.toFixed(0)} м · ` : ''}
+                  {g.rows.length} {plural(g.rows.length, 'заезд', 'заезда', 'заездов')}
+                </span>
               </div>
               <div className="flex flex-col gap-1">
                 {g.rows.map(s => {
@@ -190,6 +260,7 @@ export function Library({ cloud, picked, onPick, onClose, max }: {
 /** Справочники: пилоты и конфигурации трасс. */
 function Manage({ cloud }: { cloud: CloudState }) {
   const [ask, setAsk] = useState<{ kind: 'driver' | 'config'; id: string; name: string; n: number } | null>(null);
+  const [add, setAdd] = useState('');
 
   const run = async (fn: () => Promise<void>) => {
     try { await fn(); await cloud.refresh(); }
@@ -211,7 +282,29 @@ function Manage({ cloud }: { cloud: CloudState }) {
             onRename={v => run(() => renameDriver(d.id, v))}
             onDelete={() => setAsk({ kind: 'driver', id: d.id, name: d.name, n: driverCount(d.id) })} />
         ))}
-        {!cloud.drivers.length && <Empty text="Пилотов пока нет — они заводятся при загрузке заезда." />}
+        <div className="flex gap-2 mt-1">
+          <input value={add} onChange={e => setAdd(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && add.trim() && cloud.team) {
+                const name = add.trim();
+                setAdd('');
+                run(() => createDriver(cloud.team!.id, name).then(() => undefined));
+              }
+            }}
+            placeholder="имя нового пилота" className={`${fld} w-[200px]`} />
+          <button
+            disabled={!add.trim() || !cloud.team}
+            onClick={() => {
+              const name = add.trim();
+              setAdd('');
+              run(() => createDriver(cloud.team!.id, name).then(() => undefined));
+            }}
+            className="px-3 py-1.5 rounded-lg border border-[var(--line)] text-[12px]
+              hover:bg-[var(--panel-2)] transition disabled:opacity-40">
+            добавить
+          </button>
+        </div>
+        {!cloud.drivers.length && <Empty text="Пилотов пока нет." />}
       </Section>
 
       {orphans.length > 0 && (
@@ -281,6 +374,10 @@ function Manage({ cloud }: { cloud: CloudState }) {
     </div>
   );
 }
+
+const fld = 'bg-[var(--panel-2)] border border-[var(--line)] rounded-lg px-2.5 py-1.5 '
+  + 'text-[12px] outline-none focus:border-[var(--muted-2)] transition '
+  + 'placeholder:text-[var(--muted-2)] [color-scheme:dark]';
 
 function Section({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
   return (
