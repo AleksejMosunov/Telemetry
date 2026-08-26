@@ -1,0 +1,45 @@
+@import 'tailwindcss';
+@import 'uplot/dist/uPlot.min.css';
+
+:root {
+  --bg: #0a0c10;
+  --panel: #11141b;
+  --panel-2: #161a23;
+  --line: #232937;
+  --line-soft: #1a1f2a;
+  --text: #e7ecf5;
+  --muted: #8791a4;
+  --muted-2: #5d6779;
+  --good: #51cf66;
+  --bad: #ff6b6b;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.num { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+/* uPlot под тёмную тему */
+.uplot { font-family: inherit; }
+.u-axis { color: var(--muted); }
+.u-legend { display: none; }
+.u-cursor-x, .u-cursor-y { border-color: #3a4152; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #262c39; border-radius: 6px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: #333b4b; }
