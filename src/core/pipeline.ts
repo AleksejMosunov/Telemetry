@@ -6,7 +6,13 @@ import { zonePathLengths, normalAt } from './geometry';
 import { buildLapTrace, buildZones, zoneStats, type Zone, type ZoneStats } from './analysis';
 
 export interface LapInfo {
-  index: number; time: number; clean: boolean; isIn: boolean;
+  index: number; time: number; isIn: boolean;
+  /** круг участвует во всех расчётах: полный, не выброс и не снят вручную */
+  clean: boolean;
+  /** снят пользователем — виден в таблице, но не влияет ни на одну цифру */
+  excluded: boolean;
+  /** похоже на помеху: круг обычный везде, кроме одной зоны */
+  suspect: { zone: number; loss: number } | null;
   pathLength: number; corrections: number;
 }
 
@@ -37,8 +43,12 @@ export interface DriverResult {
   bestPathByZone: Float64Array;
   bestV: Float64Array; bestT: Float64Array; bestLat: Float64Array;
   zoneMed: ZoneStats[]; zoneBest: ZoneStats[];
-  /** [круг][зона] — время в зоне, для тепловой карты стабильности */
+  /** [круг][зона] — время в зоне, для тепловой карты стабильности; порядок совпадает с traces */
   zoneByLap: Float64Array[];
+  /** устойчивый разброс времени в зоне по кругам, с — по нему ищутся аномалии */
+  zoneSigma: Float64Array;
+  /** зонные времена снятых кругов: нужны только чтобы показать их в таблице */
+  excludedRows: { lapIndex: number; time: number; row: Float64Array }[];
 }
 
 export interface Analysis {
@@ -142,7 +152,17 @@ function medianChannel(traces: Float64Array[], N: number): Float64Array {
   return out;
 }
 
-export function analyze(files: { name: string; text: string }[]): Analysis {
+/** Устойчивый ключ заезда: не зависит ни от имени файла, ни от порядка загрузки. */
+function fingerprintOf(s: Session): string {
+  return [s.meta['Racer'], s.meta['Date'], s.meta['Time'], s.meta['Duration'], s.meta['Vehicle']]
+    .filter(Boolean).join('|');
+}
+
+/** @param excluded снятые вручную круги: отпечаток заезда -> номера кругов */
+export function analyze(
+  files: { name: string; text: string }[],
+  excluded: Record<string, number[]> = {},
+): Analysis {
   const warnings: string[] = [];
   const parsed = files.map(f => {
     const s = parseAimCsv(f.text, f.name);
@@ -183,6 +203,8 @@ export function analyze(files: { name: string; text: string }[]): Analysis {
 
   // Второй проход: усредняем траектории ВСЕХ чистых кругов всех заездов и строим
   // опорную линию по ним. Она почти не зависит от того, какие файлы загружены.
+  // Снятые вручную круги здесь участвуют намеренно: трафик портит время, но трассу
+  // карт проезжает ту же самую, а нумерация поворотов не должна прыгать от исключений.
   const latAll: Float64Array[] = [];
   for (const p of parsed) for (const l of p.clean) latAll.push(buildLapTrace(p.s, l, cl0, grid0).lat);
   const medLatAll = medianChannel(latAll, grid0.length);
@@ -201,26 +223,68 @@ export function analyze(files: { name: string; text: string }[]): Analysis {
   if (!corners.length) warnings.push('Повороты не распознаны — проверьте качество GPS');
 
   const drivers: DriverResult[] = parsed.map((p, di) => {
-    const cleanSet = new Set(p.clean.map(l => l.index));
+    const fp = fingerprintOf(p.s);
+    const autoClean = new Set(p.clean.map(l => l.index));
+    let excl = new Set(excluded[fp] ?? []);
+    // Снять можно не всё: если не осталось хотя бы двух кругов, считать нечего.
+    if (p.clean.filter(l => !excl.has(l.index)).length < 2) {
+      if (excl.size) warnings.push(`${p.file.name}: снято слишком много кругов — исключения не применены`);
+      excl = new Set();
+    }
+
     const lapInfos: LapInfo[] = [];
     const traces: DriverResult['traces'] = [];
     const zoneByLap: Float64Array[] = [];
+    const excludedRows: DriverResult['excludedRows'] = [];
 
     for (const l of p.laps) {
-      const isClean = cleanSet.has(l.index);
+      const auto = autoClean.has(l.index);
+      const isExcluded = auto && excl.has(l.index);
       const tr = buildLapTrace(p.s, l, cl, grid);
       lapInfos.push({
-        index: l.index, time: l.time, clean: isClean, isIn: l.isIn,
+        index: l.index, time: l.time, clean: auto && !isExcluded, isIn: l.isIn,
+        excluded: isExcluded, suspect: null,
         pathLength: tr.pathLength, corrections: corrections(p.s, l),
       });
-      if (isClean) {
+      if (auto && !isExcluded) {
         traces.push({ lapIndex: l.index, v: tr.v, lat: tr.lat, t: tr.t });
-        const zs = zoneStats(tr, zones, grid);
-        zoneByLap.push(Float64Array.from(zs.map(z => z.tZone)));
+        zoneByLap.push(Float64Array.from(zoneStats(tr, zones, grid).map(z => z.tZone)));
+      } else if (isExcluded) {
+        excludedRows.push({
+          lapIndex: l.index, time: l.time,
+          row: Float64Array.from(zoneStats(tr, zones, grid).map(z => z.tZone)),
+        });
       }
     }
 
+    // Разброс в зоне считаем по медиане модулей отклонений, а не по СКО: одно
+    // попадание в трафик раздувает СКО настолько, что перестаёт выделяться само.
+    const zoneMedian = new Float64Array(zones.length);
+    const zoneSigma = new Float64Array(zones.length);
+    for (let z = 0; z < zones.length; z++) {
+      const col = zoneByLap.map(r => r[z]);
+      const m = med(col);
+      zoneMedian[z] = m;
+      zoneSigma[z] = 1.4826 * med(col.map(v => Math.abs(v - m)));
+    }
+
     const cleanInfos = lapInfos.filter(l => l.clean);
+
+    // Помеха выглядит характерно: круг ничем не выделяется, кроме одной зоны, где он
+    // заметно медленнее обычного. Ошибка самого пилота обычно задевает и соседние
+    // зоны (потерял выход — потерял и следующую прямую), а плохой круг целиком —
+    // все сразу. Поэтому ищем ровно один выброс при спокойном остальном круге.
+    cleanInfos.forEach((info, k) => {
+      const dev = Array.from(zoneByLap[k], (v, z) => v - zoneMedian[z]);
+      let worst = 0;
+      for (let z = 1; z < dev.length; z++) if (dev[z] > dev[worst]) worst = z;
+      // Порог намеренно высокий: помеха на круге в минуту стоит хотя бы четверть
+      // секунды. Ниже — это уже разброс самого пилота, и снимать такие круги вредно.
+      if (dev[worst] < Math.max(3 * zoneSigma[worst], 0.25)) return;
+      const calm = dev.every((v, z) =>
+        z === worst || Math.abs(v) <= Math.max(1.5 * zoneSigma[z], 0.05));
+      if (calm) info.suspect = { zone: worst, loss: dev[worst] };
+    });
     const times = cleanInfos.map(l => l.time);
     const half = Math.floor(cleanInfos.length / 2);
     const grip = gripUsage(p.s, p.clean);
@@ -253,8 +317,7 @@ export function analyze(files: { name: string; text: string }[]): Analysis {
 
     return {
       id: `d${di}`,
-      fingerprint: [p.s.meta['Racer'], p.s.meta['Date'], p.s.meta['Time'],
-        p.s.meta['Duration'], p.s.meta['Vehicle']].filter(Boolean).join('|'),
+      fingerprint: fp,
       name: p.s.meta['Racer'] && parsed.length > 1
         ? `${p.s.meta['Racer']} · ${time24(p.s.meta['Time']) || p.file.name}`
         : (p.s.meta['Racer'] || p.file.name),
@@ -277,7 +340,7 @@ export function analyze(files: { name: string; text: string }[]): Analysis {
       medLatSd, medPathByZone, bestPathByZone,
       zoneMed: zoneStats(medTrace, zones, grid),
       zoneBest: zoneStats(bestFull, zones, grid),
-      zoneByLap,
+      zoneByLap, zoneSigma, excludedRows,
     };
   });
 

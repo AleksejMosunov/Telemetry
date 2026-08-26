@@ -6,11 +6,16 @@ import { Overview } from './views/Overview';
 import { Corners } from './views/Corners';
 import { Traces } from './views/Traces';
 import { Consistency } from './views/Consistency';
+import { Replay } from './views/Replay';
 import { Findings } from './views/Findings';
 
 export type LapMode = 'median' | 'best';
 
+/** Снятые вручную круги: отпечаток заезда -> номера кругов. */
+export type Excluded = Record<string, number[]>;
+
 const NAME_KEY = 'karting.driverNames';
+const EXCL_KEY = 'karting.excludedLaps';
 
 /** Имена пилотов переживают перезагрузку: ключ — отпечаток заезда, а не порядок файлов. */
 function loadNames(): Record<string, string> {
@@ -24,9 +29,18 @@ function persistName(fingerprint: string, value: string) {
     localStorage.setItem(NAME_KEY, JSON.stringify(all));
   } catch { /* приватный режим — просто не запоминаем */ }
 }
+
+/** Снятые круги тоже запоминаются: разбор заезда обычно идёт в несколько заходов. */
+function loadExcluded(): Excluded {
+  try { return JSON.parse(localStorage.getItem(EXCL_KEY) || '{}'); } catch { return {}; }
+}
+function persistExcluded(v: Excluded) {
+  try { localStorage.setItem(EXCL_KEY, JSON.stringify(v)); } catch { /* см. выше */ }
+}
+
 const TABS = [
   ['overview', 'Обзор'], ['corners', 'Повороты'], ['traces', 'Графики'],
-  ['consistency', 'Стабильность'], ['findings', 'Выводы'],
+  ['consistency', 'Стабильность'], ['replay', 'Повтор'], ['findings', 'Выводы'],
 ] as const;
 type Tab = typeof TABS[number][0];
 
@@ -47,6 +61,12 @@ export interface ViewCtx {
   ZP: (d: DriverResult) => Float64Array;
   /** разброс траектории по кругам, м; в режиме лучшего круга его нет */
   LATSD: (d: DriverResult) => Float64Array | null;
+  /** снятые вручную круги заезда */
+  exclOf: (d: DriverResult) => number[];
+  /** заменить набор снятых кругов и пересчитать весь анализ */
+  setExcl: (d: DriverResult, indices: number[]) => void;
+  /** идёт пересчёт — на это время клики блокируются */
+  busy: boolean;
 }
 
 export function App() {
@@ -58,29 +78,41 @@ export function App() {
   const [tab, setTab] = useState<Tab>('overview');
   const [cursorS, setCursorS] = useState<number | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
+  const [excl, setExclState] = useState<Excluded>(loadExcluded);
   const [drag, setDrag] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const refIdRef = useRef<string | undefined>(undefined);
+  const exclRef = useRef<Excluded>(excl);
 
   const filesRef = useRef<File[]>([]);
+  /** Текст уже прочитанных файлов: пересчёт после снятия круга не должен
+   *  заново поднимать с диска десятки мегабайт. */
+  const textCache = useRef(new Map<string, string>());
   const MAX = 6;
   const fileKey = (f: File) => `${f.name}|${f.size}|${f.lastModified}`;
 
   /** Пересчёт всего набора. Опорный пилот держится за отпечаток заезда,
    *  иначе он бы прыгал при каждом добавлении файла. */
-  const runAnalysis = useCallback(async (fileList: File[], keepRefFp?: string) => {
+  const runAnalysis = useCallback(async (fileList: File[], keepRefFp?: string, excluded?: Excluded) => {
     filesRef.current = fileList;
     setFiles(fileList);
     if (!fileList.length) { setA(null); setErr(null); return; }
     setBusy(true); setErr(null);
     try {
-      const payload = await Promise.all(fileList.map(async f => ({ name: f.name, text: await f.text() })));
+      const cache = textCache.current;
+      const keys = fileList.map(fileKey);
+      for (const k of [...cache.keys()]) if (!keys.includes(k)) cache.delete(k);
+      const payload = await Promise.all(fileList.map(async (f, i) => {
+        let text = cache.get(keys[i]);
+        if (text == null) { text = await f.text(); cache.set(keys[i], text); }
+        return { name: f.name, text };
+      }));
       const w = new Worker(new URL('../worker.ts', import.meta.url), { type: 'module' });
       const result = await new Promise<Analysis>((res, rej) => {
         w.onmessage = (e) => (e.data.ok ? res(e.data.result) : rej(new Error(e.data.error)));
         w.onerror = () => rej(new Error('Сбой при разборе файлов'));
-        w.postMessage({ files: payload });
+        w.postMessage({ files: payload, excluded: excluded ?? exclRef.current });
       });
       w.terminate();
       setA(result);
@@ -92,6 +124,19 @@ export function App() {
       setErr(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   }, []);
+
+  /** Снятие круга меняет медианы, потенциал и выводы — поэтому пересчитываем всё. */
+  const applyExcl = useCallback((next: Excluded) => {
+    for (const k of Object.keys(next)) if (!next[k]?.length) delete next[k];
+    exclRef.current = next;
+    setExclState(next);
+    persistExcluded(next);
+    runAnalysis(filesRef.current, refIdRef.current, next);
+  }, [runAnalysis]);
+
+  const setExcl = useCallback((d: DriverResult, indices: number[]) => {
+    applyExcl({ ...exclRef.current, [d.fingerprint]: [...indices].sort((x, y) => x - y) });
+  }, [applyExcl]);
 
   /** Новые файлы добавляются к уже загруженным, а не заменяют их. */
   const addFiles = useCallback((incoming: File[]) => {
@@ -132,7 +177,7 @@ export function App() {
     refIdRef.current = ref.fingerprint;
     const idx = (d: DriverResult) => a.drivers.indexOf(d);
     return {
-      a, ref, refId: ref.id, lapMode, cursorS, setCursorS,
+      a, ref, refId: ref.id, lapMode, cursorS, setCursorS, busy,
       name: (d) => (names[d.id]?.trim() ? names[d.id].trim() : d.name),
       color: (d) => driverColor(idx(d)),
       V: (d) => (lapMode === 'best' ? d.bestV : d.medV),
@@ -141,8 +186,12 @@ export function App() {
       Z: (d) => (lapMode === 'best' ? d.zoneBest : d.zoneMed),
       ZP: (d) => (lapMode === 'best' ? d.bestPathByZone : d.medPathByZone),
       LATSD: (d) => (lapMode === 'best' ? null : d.medLatSd),
+      exclOf: (d) => excl[d.fingerprint] ?? [],
+      setExcl,
     };
-  }, [a, refId, lapMode, cursorS, names]);
+  }, [a, refId, lapMode, cursorS, names, excl, setExcl, busy]);
+
+  const cutCount = a ? a.drivers.reduce((n, d) => n + d.laps.filter(l => l.excluded).length, 0) : 0;
 
   return (
     <div className="min-h-full flex flex-col">
@@ -202,6 +251,22 @@ export function App() {
           )}
 
           <div className="flex items-center gap-2 shrink-0 ml-auto">
+            {busy && a && (
+              <span className="flex items-center gap-1.5 text-[11px] text-[var(--muted)]">
+                <span className="w-3 h-3 rounded-full border border-[var(--line)] border-t-[var(--text)] animate-spin" />
+                пересчитываю
+              </span>
+            )}
+            {cutCount > 0 && (
+              <button
+                onClick={() => applyExcl({})}
+                title="Вернуть в расчёт все снятые круги"
+                className="px-2.5 py-1.5 rounded-lg border border-[#5a4a2b] bg-[#191510] text-[#ffd9a0]
+                  text-[11px] num hover:bg-[#221c12] transition"
+              >
+                снято {cutCount} {plural(cutCount, 'круг', 'круга', 'кругов')} · вернуть
+              </button>
+            )}
             {a && (
               <div className="flex rounded-lg border border-[var(--line)] overflow-hidden text-xs">
                 {(['median', 'best'] as const).map(m => (
@@ -245,28 +310,35 @@ export function App() {
           <div key={i} className="panel p-3 mb-3 border-[#5a4a2b] bg-[#191510] text-[#ffd9a0] text-[13px]">{w}</div>
         ))}
 
-        {busy && <Splash busy />}
+        {busy && !a && <Splash busy />}
         {!a && !busy && <Splash />}
 
-        {a && ctx && !busy && (
-          <>
+        {a && ctx && (
+          <div style={{ opacity: busy ? 0.55 : 1, transition: 'opacity .15s' }}>
             {tab === 'overview' && <Overview ctx={ctx} />}
             {tab === 'corners' && <Corners ctx={ctx} />}
             {tab === 'traces' && <Traces ctx={ctx} />}
             {tab === 'consistency' && <Consistency ctx={ctx} />}
+            {tab === 'replay' && <Replay ctx={ctx} />}
             {tab === 'findings' && <Findings ctx={ctx} />}
-          </>
+          </div>
         )}
       </main>
 
       {drag && (
         <div className="fixed inset-0 z-50 bg-[#0a0c10]/85 flex items-center justify-center pointer-events-none">
-          
           <div className="text-lg text-[var(--muted)]">Отпустите файлы</div>
         </div>
       )}
     </div>
   );
+}
+
+export function plural(n: number, one: string, few: string, many: string) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5) return few;
+  return b === 1 ? one : many;
 }
 
 function Splash({ busy }: { busy?: boolean }) {

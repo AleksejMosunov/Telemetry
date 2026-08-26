@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ViewCtx } from '../App';
-import type { DriverResult } from '../../core/pipeline';
+import { plural } from '../App';
+import type { DriverResult, LapInfo } from '../../core/pipeline';
 import { lapTime, delta, num } from '../format';
 
 interface ZoneStat {
@@ -10,14 +11,25 @@ interface ZoneStat {
   hitRate: number;      // доля кругов в пределах 0.05 с от своего лучшего
 }
 
+interface Row {
+  lapIndex: number; time: number;
+  dev: number[];        // отклонение по зонам от медианы пилота
+  total: number;
+  excluded: boolean;
+  suspect: LapInfo['suspect'];
+}
+
 interface DriverConsistency {
   d: DriverResult;
-  laps: { index: number; time: number; row: number[]; total: number }[];
+  rows: Row[];          // все круги: и в расчёте, и снятые
+  used: number;         // сколько кругов реально участвует
   zones: ZoneStat[];
+  sigma: Float64Array;  // устойчивый разброс по зонам
   scale: number;
   potential: number;    // круг из собственных лучших зон
   bestLapTime: number;
   medianLapTime: number;
+  suspects: number[];   // номера кругов, похожих на помеху и ещё не снятых
 }
 
 const med = (x: number[]) => { const s = [...x].sort((a, b) => a - b); return s[s.length >> 1]; };
@@ -43,21 +55,41 @@ function analyse(ctx: ViewCtx): DriverConsistency[] {
       });
     }
 
-    const laps = d.zoneByLap.map((r, i) => {
-      const row = Array.from({ length: nz }, (_, z) => r[z] - zones[z].median);
+    const mkDev = (r: ArrayLike<number>) => Array.from({ length: nz }, (_, z) => r[z] - zones[z].median);
+    const rows: Row[] = d.zoneByLap.map((r, i) => {
+      const dev = mkDev(r);
       return {
-        index: clean[i].index, time: clean[i].time, row,
-        total: row.reduce((p, q) => p + q, 0),
+        lapIndex: clean[i].index, time: clean[i].time, dev,
+        total: dev.reduce((p, q) => p + q, 0),
+        excluded: false, suspect: clean[i].suspect,
       };
     });
+    // Снятые круги остаются в таблице — иначе их нечем вернуть, да и видно,
+    // за что именно они сняты.
+    for (const e of d.excludedRows) {
+      const dev = mkDev(e.row);
+      rows.push({
+        lapIndex: e.lapIndex, time: e.time, dev,
+        total: dev.reduce((p, q) => p + q, 0),
+        excluded: true, suspect: null,
+      });
+    }
+    rows.sort((p, q) => p.lapIndex - q.lapIndex);
 
-    const flat = laps.flatMap(l => l.row).filter(v => isFinite(v)).map(Math.abs).sort((p, q) => p - q);
+    // Шкала — только по кругам в расчёте: снятый круг с большим выбросом
+    // иначе сплющил бы все остальные цвета.
+    const flat = rows.filter(r => !r.excluded).flatMap(r => r.dev)
+      .filter(v => isFinite(v)).map(Math.abs).sort((p, q) => p - q);
+
     return {
-      d, laps, zones,
+      d, rows, zones,
+      used: clean.length,
+      sigma: d.zoneSigma,
       scale: Math.max(0.02, flat[Math.floor(flat.length * 0.9)] ?? 0.05),
       potential: zones.reduce((p, q) => p + q.best, 0),
       bestLapTime: Math.min(...clean.map(l => l.time)),
       medianLapTime: med(clean.map(l => l.time)),
+      suspects: clean.filter(l => l.suspect).map(l => l.index),
     };
   });
 }
@@ -73,6 +105,8 @@ export function Consistency({ ctx }: { ctx: ViewCtx }) {
           Каждая клетка — отклонение круга от собственной медианы пилота в этой зоне.
           Красное — медленнее обычного, зелёное — быстрее. Ровный столбец значит, что поворот
           отработан на автомате; пёстрый — что каждый раз получается по-разному, и там есть что забрать.
+          Клик по номеру круга снимает его со всех расчётов — так убирают круги, испорченные
+          трафиком или ошибкой; повторный клик возвращает.
         </div>
       </div>
 
@@ -82,29 +116,65 @@ export function Consistency({ ctx }: { ctx: ViewCtx }) {
 }
 
 function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
-  const { name, color } = ctx;
+  const { name, color, exclOf, setExcl, busy } = ctx;
   const [hi, setHi] = useState<{ lap: number; z: number } | null>(null);
   const worst = [...dc.zones].sort((p, q) => q.onTheTable - p.onTheTable);
   const gap = dc.medianLapTime - dc.potential;
   const gapFromBest = dc.bestLapTime - dc.potential;
   const maxTable = Math.max(...dc.zones.map(z => z.onTheTable), 0.001);
-  const bestIdx = dc.laps.reduce((a, b, i, arr) => (arr[i].time < arr[a].time ? i : a), 0);
-  const maxTotal = Math.max(...dc.laps.map(l => Math.abs(l.total)), 0.001);
+  const inPlay = dc.rows.filter(r => !r.excluded);
+  const bestLapIndex = inPlay.reduce((p, q) => (q.time < p.time ? q : p), inPlay[0]).lapIndex;
+  const maxTotal = Math.max(...inPlay.map(l => Math.abs(l.total)), 0.001);
+  const cut = exclOf(dc.d);
+  const nCut = dc.rows.filter(r => r.excluded).length;
+
+  const toggle = (lapIndex: number) => {
+    if (busy) return;
+    setExcl(dc.d, cut.includes(lapIndex) ? cut.filter(i => i !== lapIndex) : [...cut, lapIndex]);
+  };
 
   return (
     <div className="panel p-4">
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
         <span className="w-2.5 h-2.5 rounded-full" style={{ background: color(dc.d) }} />
         <span className="text-[13px] font-medium">{name(dc.d)}</span>
         <span className="text-[11px] text-[var(--muted)] num">
-          {dc.laps.length} кругов · разброс ±{dc.d.stats.sd.toFixed(3)} с
+          {dc.used} {plural(dc.used, 'круг', 'круга', 'кругов')} в расчёте · разброс ±{dc.d.stats.sd.toFixed(3)} с
+          {nCut > 0 && <span className="text-[#ffd9a0]"> · {nCut} снято</span>}
         </span>
+        {nCut > 0 && (
+          <button disabled={busy} onClick={() => setExcl(dc.d, [])}
+            className="text-[11px] px-2 py-0.5 rounded border border-[var(--line)] text-[var(--muted)]
+              hover:text-[var(--text)] hover:bg-[var(--panel-2)] transition disabled:opacity-40">
+            вернуть все
+          </button>
+        )}
       </div>
+
+      {dc.suspects.length > 0 && (
+        <div className="rounded-lg px-3 py-2 mb-3 flex items-center gap-3 flex-wrap text-[12px]"
+          style={{ background: 'rgba(255,146,43,0.09)' }}>
+          <span className="text-[#ffc078]">⚠</span>
+          <span className="leading-snug">
+            Похоже на помеху: {dc.suspects.length}{' '}
+            {plural(dc.suspects.length, 'круг', 'круга', 'кругов')} —{' '}
+            <span className="num">{dc.suspects.map(i => `#${i}`).join(', ')}</span>.
+            Такой круг обычен везде, кроме одной зоны, где он резко медленнее: это чаще упёршийся
+            впереди карт, чем ошибка пилота.
+          </span>
+          <button disabled={busy}
+            onClick={() => setExcl(dc.d, [...new Set([...cut, ...dc.suspects])])}
+            className="ml-auto text-[11px] px-2.5 py-1 rounded border border-[#5a4a2b] bg-[#191510]
+              text-[#ffd9a0] hover:bg-[#221c12] transition disabled:opacity-40">
+            снять их
+          </button>
+        </div>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[auto_1fr] items-start">
         <div className="overflow-x-auto">
           <div className="inline-block">
-            <div className="flex gap-[3px] mb-1" style={{ paddingLeft: 92 }}>
+            <div className="flex gap-[3px] mb-1" style={{ paddingLeft: 106 }}>
               {dc.zones.map(z => (
                 <div key={z.z} className="text-[10px] text-[var(--muted-2)] text-center num" style={{ width: 32 }}>
                   {z.name}
@@ -112,51 +182,76 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
               ))}
             </div>
 
-            {dc.laps.map((l, li) => (
-              <div key={l.index} className="flex gap-[3px] items-center mb-[3px]">
-                <div className="flex items-center justify-end gap-1.5" style={{ width: 88 }}>
-                  {li === bestIdx && <span className="text-[9px] text-[var(--good)]" title="лучший круг">★</span>}
-                  <span className="text-[10px] text-[var(--muted-2)] num">#{l.index}</span>
-                  <span className="text-[10px] num" style={{ color: li === bestIdx ? 'var(--good)' : 'var(--muted)' }}>
-                    {l.time.toFixed(2)}
-                  </span>
-                </div>
-
-                {l.row.map((v, zi) => {
-                  const t = Math.max(-1, Math.min(1, v / dc.scale));
-                  const outlier = Math.abs(v) > 2 * dc.zones[zi].sd && Math.abs(v) > 0.05;
-                  return (
-                    <div key={zi}
-                      onMouseEnter={() => setHi({ lap: li, z: zi })}
-                      onMouseLeave={() => setHi(null)}
-                      title={`Круг ${l.index} · ${dc.zones[zi].name} · ${delta(v)} с к своей медиане`}
-                      className="rounded-[3px] cursor-default transition-transform hover:scale-110"
+            {dc.rows.map(l => {
+              const isBest = !l.excluded && l.lapIndex === bestLapIndex;
+              return (
+                <div key={l.lapIndex} className="flex gap-[3px] items-center mb-[3px]"
+                  style={{ opacity: l.excluded ? 0.4 : 1 }}>
+                  <button
+                    onClick={() => toggle(l.lapIndex)}
+                    disabled={busy}
+                    title={l.excluded
+                      ? `Круг ${l.lapIndex} снят с расчётов — вернуть`
+                      : l.suspect
+                        ? `Круг ${l.lapIndex}: похоже на помеху в ${dc.zones[l.suspect.zone].name} `
+                          + `(+${l.suspect.loss.toFixed(3)} с к обычному). Снять с расчётов`
+                        : `Снять круг ${l.lapIndex} со всех расчётов`}
+                    className="flex items-center justify-end gap-1 rounded px-1 py-0.5 -my-0.5
+                      hover:bg-[var(--panel-2)] transition disabled:cursor-default"
+                    style={{ width: 102 }}
+                  >
+                    <span className="w-3 text-[9px] leading-none"
+                      style={{ color: l.suspect && !l.excluded ? '#ffc078' : 'var(--good)' }}>
+                      {l.excluded ? '' : isBest ? '★' : l.suspect ? '⚠' : ''}
+                    </span>
+                    <span className="text-[10px] text-[var(--muted-2)] num">#{l.lapIndex}</span>
+                    <span className="text-[10px] num"
                       style={{
-                        width: 32, height: 15,
-                        background: t > 0
-                          ? `rgba(255,107,107,${0.12 + 0.72 * t})`
-                          : `rgba(81,207,102,${0.12 + 0.72 * -t})`,
-                        outline: outlier ? '1px solid rgba(255,255,255,0.45)' : undefined,
-                        outlineOffset: -1,
-                      }} />
-                  );
-                })}
+                        color: isBest ? 'var(--good)' : 'var(--muted)',
+                        textDecoration: l.excluded ? 'line-through' : undefined,
+                      }}>
+                      {l.time.toFixed(2)}
+                    </span>
+                    <span className="text-[10px] w-3 leading-none"
+                      style={{ color: l.excluded ? '#ffd9a0' : 'transparent' }}>↺</span>
+                  </button>
 
-                <div className="ml-2 relative" style={{ width: 54, height: 15 }}>
-                  <div className="absolute top-0 bottom-0 rounded-[2px]" style={{
-                    left: l.total >= 0 ? '50%' : undefined,
-                    right: l.total < 0 ? '50%' : undefined,
-                    width: `${(Math.abs(l.total) / maxTotal) * 50}%`,
-                    background: l.total >= 0 ? 'rgba(255,107,107,0.5)' : 'rgba(81,207,102,0.5)',
-                  }} />
-                  <div className="absolute inset-y-0 left-1/2 w-px bg-[var(--line)]" />
+                  {l.dev.map((v, zi) => {
+                    const t = Math.max(-1, Math.min(1, v / dc.scale));
+                    const outlier = !l.excluded && Math.abs(v) > 2 * dc.sigma[zi] && Math.abs(v) > 0.05;
+                    return (
+                      <div key={zi}
+                        onMouseEnter={() => setHi({ lap: l.lapIndex, z: zi })}
+                        onMouseLeave={() => setHi(null)}
+                        title={`Круг ${l.lapIndex} · ${dc.zones[zi].name} · ${delta(v)} с к своей медиане`}
+                        className="rounded-[3px] cursor-default transition-transform hover:scale-110"
+                        style={{
+                          width: 32, height: 15,
+                          background: t > 0
+                            ? `rgba(255,107,107,${0.12 + 0.72 * t})`
+                            : `rgba(81,207,102,${0.12 + 0.72 * -t})`,
+                          outline: outlier ? '1px solid rgba(255,255,255,0.45)' : undefined,
+                          outlineOffset: -1,
+                        }} />
+                    );
+                  })}
+
+                  <div className="ml-2 relative" style={{ width: 54, height: 15 }}>
+                    <div className="absolute top-0 bottom-0 rounded-[2px]" style={{
+                      left: l.total >= 0 ? '50%' : undefined,
+                      right: l.total < 0 ? '50%' : undefined,
+                      width: `${Math.min(50, (Math.abs(l.total) / maxTotal) * 50)}%`,
+                      background: l.total >= 0 ? 'rgba(255,107,107,0.5)' : 'rgba(81,207,102,0.5)',
+                    }} />
+                    <div className="absolute inset-y-0 left-1/2 w-px bg-[var(--line)]" />
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
-            <div className="text-[10px] text-[var(--muted-2)] mt-2 num" style={{ paddingLeft: 92 }}>
-              шкала ±{dc.scale.toFixed(3)} с · белая рамка — круг, где отклонение вдвое больше
-              обычного разброса (вероятно трафик или ошибка) · полоса справа — круг целиком
+            <div className="text-[10px] text-[var(--muted-2)] mt-2 num leading-relaxed" style={{ paddingLeft: 106 }}>
+              шкала ±{dc.scale.toFixed(3)} с · белая рамка — клетка, где отклонение вдвое больше
+              обычного разброса · полоса справа — круг целиком · клик по номеру снимает круг с расчётов
             </div>
           </div>
         </div>

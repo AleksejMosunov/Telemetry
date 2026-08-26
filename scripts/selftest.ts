@@ -3,8 +3,9 @@ import { analyze } from '../src/core/pipeline';
 import { buildInsights } from '../src/ui/insights';
 
 const DIR = '/Users/macbook/Documents/karting/telemetry/csv';
+const FILES = ['1.csv', '2.csv'].map(n => ({ name: n, text: readFileSync(`${DIR}/${n}`, 'utf8') }));
 const t0 = Date.now();
-const a = analyze(['1.csv', '2.csv'].map(n => ({ name: n, text: readFileSync(`${DIR}/${n}`, 'utf8') })));
+const a = analyze(FILES);
 console.log(`analyze(): ${Date.now() - t0} мс\n`);
 
 console.log(`Трасса ${a.track.length.toFixed(0)} м · ${a.corners.length} поворотов · сетка ${a.grid.length} точек`);
@@ -67,6 +68,36 @@ checks.push(['сумма зон = дельта усреднённых круго
   Math.abs(total - synthDelta[0]) < 0.01, `${total.toFixed(3)} против ${synthDelta[0].toFixed(3)}`]);
 checks.push(['таблица поворотов и графики берут один источник',
   Math.abs(total - synthDelta[0]) < 0.01, 'иначе панели показывали бы разные круги']);
+
+// Снятие круга: цифры обязаны поехать, а нумерация поворотов — нет.
+const victim = a.drivers[1];
+const cutLap = victim.laps.filter(l => l.clean).sort((x, y) => y.time - x.time)[0].index;
+const b = analyze(FILES, { [victim.fingerprint]: [cutLap] });
+const vb = b.drivers[1];
+checks.push(['снятый круг выпал из расчёта',
+  vb.laps.filter(l => l.clean).length === victim.laps.filter(l => l.clean).length - 1
+  && vb.laps.find(l => l.index === cutLap)?.excluded === true,
+  `#${cutLap}`]);
+checks.push(['снятый круг остался виден в таблице стабильности',
+  vb.excludedRows.length === 1 && vb.excludedRows[0].lapIndex === cutLap
+  && vb.excludedRows[0].row.length === b.zones.length, '']);
+checks.push(['нумерация поворотов от снятия не поплыла',
+  b.corners.length === a.corners.length
+  && b.corners.every((c, i) => Math.abs(c.sApex - a.corners[i].sApex) < 1), '']);
+// Медиана от снятия одного крайнего круга смещаться не обязана — а разброс обязан.
+checks.push(['снятие самого медленного круга сузило разброс',
+  vb.stats.sd < victim.stats.sd && vb.stats.median <= victim.stats.median,
+  `σ ${victim.stats.sd.toFixed(3)} -> ${vb.stats.sd.toFixed(3)}`]);
+checks.push(['зоны по-прежнему в сумме дают усреднённый круг',
+  Math.abs(vb.zoneMed.reduce((s2, z) => s2 + z.tZone, 0) - vb.medT[b.grid.length - 1]) < 0.01, '']);
+const allCut = analyze(FILES, { [victim.fingerprint]: victim.laps.map(l => l.index) });
+checks.push(['снять все круги нельзя — заезд остаётся считаемым',
+  allCut.drivers[1].laps.filter(l => l.clean).length >= 2 && allCut.warnings.length > 0,
+  allCut.warnings[0] ?? 'предупреждения нет']);
+const susp = a.drivers.flatMap(d => d.laps.filter(l => l.suspect).map(l => `${d.id}#${l.index} ${a.zones[l.suspect!.zone].corner.name} +${l.suspect!.loss.toFixed(3)}`));
+checks.push(['детектор помех не сыплет ложными срабатываниями',
+  susp.length <= Math.ceil(0.1 * a.drivers.reduce((n, d) => n + d.laps.filter(l => l.clean).length, 0)),
+  susp.length ? susp.join(', ') : 'подозрительных кругов нет']);
 
 let bad = 0;
 for (const [name, ok, note] of checks) {
