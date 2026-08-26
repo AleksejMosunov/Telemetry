@@ -2,7 +2,7 @@ import { parseAimCsv, ch, type Session } from './parse';
 import { makeProjector, project } from './geo';
 import { splitLaps, cleanLaps, buildCenterline, detectCorners, type Corner, type Lap } from './track';
 import { makeGrid } from './align';
-import { zonePathLengths } from './geometry';
+import { zonePathLengths, normalAt } from './geometry';
 import { buildLapTrace, buildZones, zoneStats, type Zone, type ZoneStats } from './analysis';
 
 export interface LapInfo {
@@ -176,7 +176,25 @@ export function analyze(files: { name: string; text: string }[]): Analysis {
   for (let i = refLap.i0; i < refLap.i1; i++) {
     const [x, y] = project(proj, latR[i], lonR[i]); rx.push(x); ry.push(y);
   }
-  const cl = buildCenterline(rx, ry, proj, 1.0, 6);
+  // Первый проход даёт черновую осевую по одному кругу. Строить нарезку поворотов
+  // на ней нельзя: сменится лучший круг — сместятся границы, и T7 превратится в T6.
+  const cl0 = buildCenterline(rx, ry, proj, 1.0, 6);
+  const grid0 = makeGrid(cl0.length, 1.0);
+
+  // Второй проход: усредняем траектории ВСЕХ чистых кругов всех заездов и строим
+  // опорную линию по ним. Она почти не зависит от того, какие файлы загружены.
+  const latAll: Float64Array[] = [];
+  for (const p of parsed) for (const l of p.clean) latAll.push(buildLapTrace(p.s, l, cl0, grid0).lat);
+  const medLatAll = medianChannel(latAll, grid0.length);
+  const ax: number[] = [], ay: number[] = [];
+  for (let i = 0; i < cl0.n; i++) {
+    const [nx, ny] = normalAt(cl0, i);
+    const off = medLatAll[Math.min(i, medLatAll.length - 1)] || 0;
+    ax.push(cl0.x[i] + nx * off);
+    ay.push(cl0.y[i] + ny * off);
+  }
+
+  const cl = buildCenterline(ax, ay, proj, 1.0, 6);
   const grid = makeGrid(cl.length, 1.0);
   const corners = detectCorners(cl);
   const zones = buildZones(corners, cl.length);

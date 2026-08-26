@@ -59,15 +59,23 @@ export function App() {
   const [cursorS, setCursorS] = useState<number | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
   const [drag, setDrag] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
   const input = useRef<HTMLInputElement>(null);
+  const refIdRef = useRef<string | undefined>(undefined);
 
-  const load = useCallback(async (files: File[]) => {
-    const csv = files.filter(f => /\.csv$/i.test(f.name));
-    if (!csv.length) { setErr('Нужны CSV-файлы, выгруженные из RaceStudio 3'); return; }
-    if (csv.length > 6) { setErr('Больше 6 заездов за раз пока не поддерживается'); return; }
+  const filesRef = useRef<File[]>([]);
+  const MAX = 6;
+  const fileKey = (f: File) => `${f.name}|${f.size}|${f.lastModified}`;
+
+  /** Пересчёт всего набора. Опорный пилот держится за отпечаток заезда,
+   *  иначе он бы прыгал при каждом добавлении файла. */
+  const runAnalysis = useCallback(async (fileList: File[], keepRefFp?: string) => {
+    filesRef.current = fileList;
+    setFiles(fileList);
+    if (!fileList.length) { setA(null); setErr(null); return; }
     setBusy(true); setErr(null);
     try {
-      const payload = await Promise.all(csv.map(async f => ({ name: f.name, text: await f.text() })));
+      const payload = await Promise.all(fileList.map(async f => ({ name: f.name, text: await f.text() })));
       const w = new Worker(new URL('../worker.ts', import.meta.url), { type: 'module' });
       const result = await new Promise<Analysis>((res, rej) => {
         w.onmessage = (e) => (e.data.ok ? res(e.data.result) : rej(new Error(e.data.error)));
@@ -78,19 +86,35 @@ export function App() {
       setA(result);
       const stored = loadNames();
       setNames(Object.fromEntries(result.drivers.map(d => [d.id, stored[d.fingerprint] ?? ''])));
-      // опорным берём самого быстрого — от него считаются все дельты
-      setRefId(result.drivers.reduce((p, q) => (p.stats.best <= q.stats.best ? p : q)).id);
+      const keep = keepRefFp ? result.drivers.find(d => d.fingerprint === keepRefFp) : undefined;
+      setRefId((keep ?? result.drivers.reduce((p, q) => (p.stats.best <= q.stats.best ? p : q))).id);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   }, []);
+
+  /** Новые файлы добавляются к уже загруженным, а не заменяют их. */
+  const addFiles = useCallback((incoming: File[]) => {
+    const csv = incoming.filter(f => /\.csv$/i.test(f.name));
+    if (!csv.length) { setErr('Нужны CSV-файлы, выгруженные из RaceStudio 3'); return; }
+    const have = new Set(filesRef.current.map(fileKey));
+    const fresh = csv.filter(f => !have.has(fileKey(f)));
+    if (!fresh.length) { setErr('Эти заезды уже загружены'); return; }
+    const next = [...filesRef.current, ...fresh];
+    if (next.length > MAX) {
+      setErr(`Загружено ${filesRef.current.length}, добавляется ${fresh.length} — максимум ${MAX} заездов за раз`);
+      return;
+    }
+    setErr(null);
+    runAnalysis(next, refIdRef.current);
+  }, [runAnalysis]);
 
   useEffect(() => {
     const over = (e: DragEvent) => { e.preventDefault(); setDrag(true); };
     const leave = (e: DragEvent) => { if (e.relatedTarget === null) setDrag(false); };
     const drop = (e: DragEvent) => {
       e.preventDefault(); setDrag(false);
-      if (e.dataTransfer?.files.length) load([...e.dataTransfer.files]);
+      if (e.dataTransfer?.files.length) addFiles([...e.dataTransfer.files]);
     };
     window.addEventListener('dragover', over);
     window.addEventListener('dragleave', leave);
@@ -100,11 +124,12 @@ export function App() {
       window.removeEventListener('dragleave', leave);
       window.removeEventListener('drop', drop);
     };
-  }, [load]);
+  }, [addFiles]);
 
   const ctx: ViewCtx | null = useMemo(() => {
     if (!a) return null;
     const ref = a.drivers.find(d => d.id === refId) ?? a.drivers[0];
+    refIdRef.current = ref.fingerprint;
     const idx = (d: DriverResult) => a.drivers.indexOf(d);
     return {
       a, ref, refId: ref.id, lapMode, cursorS, setCursorS,
@@ -131,11 +156,11 @@ export function App() {
           {a && (
             <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
               {a.drivers.map((d, i) => (
-                <button
+                <div
                   key={d.id}
                   onClick={() => setRefId(d.id)}
                   title="Сделать опорным — от него считаются все дельты"
-                  className={`group flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-lg border text-left transition
+                  className={`group flex items-center gap-2 pl-2 pr-1.5 py-1.5 rounded-lg border cursor-pointer transition
                     ${d.id === refId ? 'border-[var(--line)] bg-[var(--panel-2)]' : 'border-transparent hover:bg-[var(--panel)]'}`}
                 >
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: driverColor(i) }} />
@@ -162,7 +187,16 @@ export function App() {
                       {d.id === refId && <span className="text-[var(--muted-2)]"> · опорный</span>}
                     </span>
                   </span>
-                </button>
+                  <button
+                    onClick={e => {
+                      e.stopPropagation();
+                      runAnalysis(filesRef.current.filter((_, k) => k !== i), refIdRef.current);
+                    }}
+                    title="Убрать этот заезд"
+                    className="w-5 h-5 shrink-0 rounded flex items-center justify-center text-[var(--muted-2)]
+                      opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-[var(--text)] transition"
+                  >×</button>
+                </div>
               ))}
             </div>
           )}
@@ -180,10 +214,13 @@ export function App() {
             )}
             <button onClick={() => input.current?.click()}
               className="px-3 py-1.5 rounded-lg border border-[var(--line)] text-xs hover:bg-[var(--panel-2)] transition">
-              {a ? 'Загрузить другие' : 'Выбрать файлы'}
+              {a ? `Добавить заезд${files.length ? ` (${files.length}/${MAX})` : ''}` : 'Выбрать файлы'}
             </button>
             <input ref={input} type="file" accept=".csv" multiple hidden
-              onChange={e => e.target.files && load([...e.target.files])} />
+              onChange={e => {
+                if (e.target.files) addFiles([...e.target.files]);
+                e.target.value = '';   // иначе тот же файл нельзя выбрать повторно после удаления
+              }} />
           </div>
         </div>
 
@@ -245,7 +282,7 @@ function Splash({ busy }: { busy?: boolean }) {
           <div className="text-[15px] mb-2">Перетащите сюда CSV-файлы заездов</div>
           <div className="text-[var(--muted)] text-[13px] max-w-md leading-relaxed">
             Экспорт из RaceStudio 3 с включёнными каналами GPS Latitude и GPS Longitude.
-            Один файл — анализ заезда, несколько — сравнение пилотов.
+            Один файл — анализ заезда, несколько — сравнение пилотов; заезды можно докидывать по одному.
             Трасса и повороты определяются из логов сами, а имена пилотов
             вписываются в шапке и запоминаются на будущее.
           </div>

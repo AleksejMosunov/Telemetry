@@ -106,7 +106,9 @@ export interface Corner {
 }
 
 /** Нарезка поворотов по кривизне осевой линии — свойство трассы, не пилота. */
-export function detectCorners(cl: Centerline, minCurv = 0.018, minLenM = 10, gapM = 12): Corner[] {
+export function detectCorners(
+  cl: Centerline, minCurv = 0.018, minLenM = 10, gapM = 12, minTurnDeg = 28,
+): Corner[] {
   const n = cl.n, st = cl.step;
   const active = new Uint8Array(n);
   for (let i = 0; i < n; i++) active[i] = Math.abs(cl.curv[i]) > minCurv ? 1 : 0;
@@ -139,8 +141,15 @@ export function detectCorners(cl: Centerline, minCurv = 0.018, minLenM = 10, gap
   }
 
   const corners: Corner[] = [];
+  const minTurn = (minTurnDeg * Math.PI) / 180;
   for (const [a, b] of merged) {
     if ((b - a + 1) * st < minLenM) continue;
+    // Порог по кривизне сам по себе нестабилен: пологий излом то проходит, то нет,
+    // и нумерация поворотов скачет между анализами. Суммарный угол поворота —
+    // свойство трассы, оно так не плавает.
+    let turn = 0;
+    for (let k = a; k <= b; k++) turn += Math.abs(cl.curv[(start0 + k) % n]) * st;
+    if (turn < minTurn) continue;
     let apex = a, best = 0;
     for (let k = a; k <= b; k++) {
       const c = Math.abs(cl.curv[(start0 + k) % n]);
