@@ -183,7 +183,7 @@ export function App() {
                     <span aria-hidden className="text-[10px] text-[var(--muted-2)] opacity-0 group-hover:opacity-100 transition-opacity">✎</span>
                     </span>
                     <span className="num text-[11px] text-[var(--muted)]">
-                      {lapTime(d.stats.best)} · σ {d.stats.sd.toFixed(3)}
+                      {lapTime(d.stats.best)} · ±{d.stats.sd.toFixed(3)}
                       {d.id === refId && <span className="text-[var(--muted-2)]"> · опорный</span>}
                     </span>
                   </span>

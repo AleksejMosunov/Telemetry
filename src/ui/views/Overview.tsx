@@ -5,16 +5,7 @@ import type { DriverResult } from '../../core/pipeline';
 import { TrackMap, MapLegend, type MapMode } from '../TrackMap';
 import { Chart } from '../Chart';
 import { lapTime, delta, num, deltaColor } from '../format';
-
-/** Локальная скорость потери времени: производная дельты по дистанции, сглаженная. */
-export function deltaRate(t: Float64Array, tRef: Float64Array, win = 12): Float64Array {
-  const n = t.length, out = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    const a = Math.max(0, i - win), b = Math.min(n - 1, i + win);
-    out[i] = ((t[b] - tRef[b]) - (t[a] - tRef[a])) / (b - a);
-  }
-  return out;
-}
+import { deltaRate } from '../../core/analysis';
 
 export function Overview({ ctx }: { ctx: ViewCtx }) {
   const { a, ref, name, color, V, T } = ctx;
@@ -165,25 +156,35 @@ function DriverCard({ d, ctx }: { d: DriverResult; ctx: ViewCtx }) {
       </div>
       <div className="text-[11px] text-[var(--muted-2)] mb-3">лучший круг · {clean} чистых кругов</div>
       <Row label="медиана" value={lapTime(d.stats.median)}
+        hint="Время круга, ровно посередине между лучшим и худшим: половина кругов быстрее, половина медленнее. Показывает реальный темп, а не разовую удачу."
         extra={isRef ? null : delta(d.stats.median - ref.stats.median)}
         extraColor={deltaColor(d.stats.median - ref.stats.median)} />
-      <Row label="стабильность σ" value={`${d.stats.sd.toFixed(3)} с`} />
+      <Row label="разброс кругов" value={`±${d.stats.sd.toFixed(3)} с`}
+        hint={`В двух третях кругов пилот укладывается в ${lapTime(d.stats.median)} плюс-минус ${d.stats.sd.toFixed(3)} с. Меньше — ровнее едет. В статистике эту величину называют сигмой (σ) или стандартным отклонением.`} />
       <Row label="длина траектории" value={`${num(d.stats.medianPath)} м`}
+        hint="Сколько метров пилот реально проезжает за круг по своей траектории. Длина осевой линии трассы — для сравнения. Каждый лишний метр это примерно 0.05 с."
         extra={isRef ? null : `${dPath > 0 ? '+' : '−'}${Math.abs(dPath).toFixed(1)} м`}
         extraColor={deltaColor(dPath)} />
-      <Row label="ход стинта" value={`${d.stats.drift > 0 ? '+' : '−'}${Math.abs(d.stats.drift).toFixed(3)} с`}
-        extra={d.stats.drift < -0.05 ? 'разгоняется' : d.stats.drift > 0.05 ? 'замедляется' : 'ровно'} />
-      <Row label="пик перегрузки" value={`${num(d.stats.peakG, 2)} g`} />
+      <Row label="темп по стинту"
+        value={d.stats.drift < -0.05 ? 'разогнался' : d.stats.drift > 0.05 ? 'сдал' : 'ровно'}
+        hint={`Среднее время круга во второй половине стинта минус в первой: ${d.stats.firstHalf.toFixed(3)} → ${d.stats.secondHalf.toFixed(3)} с. Минус — к концу ехал быстрее (раскатался, трасса прогрелась, топливо выгорело). Плюс — сдавал (резина, усталость).`}
+        extra={`${d.stats.drift > 0 ? '+' : '−'}${Math.abs(d.stats.drift).toFixed(3)} с`}
+        extraColor={d.stats.drift < -0.05 ? 'var(--good)' : d.stats.drift > 0.05 ? 'var(--bad)' : 'var(--muted-2)'} />
+      <Row label="пик перегрузки" value={`${num(d.stats.peakG, 2)} g`}
+        hint="Наибольшее суммарное ускорение за круг — торможение и поворот вместе. Показывает, насколько пилот готов давить. Одинаковые значения у разных пилотов означают, что дело не в смелости, а в технике." />
     </div>
   );
 }
 
-function Row({ label, value, extra, extraColor }: {
-  label: string; value: string; extra?: string | null; extraColor?: string;
+function Row({ label, value, extra, extraColor, hint }: {
+  label: string; value: string; extra?: string | null; extraColor?: string; hint?: string;
 }) {
   return (
-    <div className="flex items-center justify-between py-1 text-[12px] border-t border-[var(--line-soft)]">
-      <span className="text-[var(--muted)]">{label}</span>
+    <div className="flex items-center justify-between py-1 text-[12px] border-t border-[var(--line-soft)]"
+      title={hint}>
+      <span className={`text-[var(--muted)] ${hint ? 'decoration-dotted decoration-[var(--muted-2)] underline underline-offset-[3px] cursor-help' : ''}`}>
+        {label}
+      </span>
       <span className="num flex items-center gap-1.5">
         {value}
         {extra && <span style={{ color: extraColor ?? 'var(--muted-2)' }} className="text-[11px]">{extra}</span>}

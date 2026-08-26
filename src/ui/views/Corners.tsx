@@ -1,15 +1,21 @@
 import { useMemo, useState } from 'react';
 import type { ViewCtx } from '../App';
-import { TrackMap } from '../TrackMap';
+import { TrackMap, MapLegend } from '../TrackMap';
+import { deltaRate } from '../../core/analysis';
 import { CornerDetail } from './CornerDetail';
 import { delta, num, deltaColor } from '../format';
 
 const METRICS = [
-  ['dt', 'потеря времени', 'с'],
-  ['vmin', 'минимальная скорость', 'км/ч'],
-  ['vexit', 'скорость на выходе', 'км/ч'],
-  ['ventry', 'скорость на входе', 'км/ч'],
-  ['brake', 'точка замедления', 'м'],
+  ['dt', 'потеря времени', 'с',
+   'Сколько времени пилот теряет или выигрывает в зоне относительно опорного. Сумма по всем зонам равна дельте круга.'],
+  ['vmin', 'минимальная скорость', 'км/ч',
+   'Самая низкая скорость внутри поворота. Это не геометрический апекс — низшая точка обычно оказывается позже него.'],
+  ['vexit', 'скорость на выходе', 'км/ч',
+   'Скорость в момент выхода из поворота. От неё зависит вся последующая прямая, поэтому она важнее скорости в апексе.'],
+  ['ventry', 'скорость на входе', 'км/ч',
+   'Скорость в момент входа в поворот, до начала дуги.'],
+  ['brake', 'точка замедления', 'м',
+   'Отметка на круге, в метрах от старт/финиша, где кончается разгон и начинается замедление перед этим поворотом. Меньше — тормозит раньше. Прочерк значит, что точки замедления нет вообще: поворот либо проходится без сброса скорости, либо входит в связку и торможение относилось к предыдущему.'],
 ] as const;
 type Metric = typeof METRICS[number][0];
 
@@ -49,19 +55,40 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
   });
   const maxAbs = Math.max(0.001, ...rows.flatMap(r => r.cells.map(c => Math.abs(metric === 'dt' ? c.d : 0))));
 
+  const unit = METRICS.find(([m]) => m === metric)![2];
   const digits = metric === 'dt' ? 3 : metric === 'brake' ? 0 : 1;
   const lowerBetter = metric === 'dt' || metric === 'brake';
 
-  const mapValues = useMemo(() => {
-    const out = new Float64Array(a.grid.length);
-    if (shown == null) return V(ref);
-    const z = a.zones[shown];
-    for (let i = 0; i < out.length; i++) {
-      const inZone = z.sStart < z.sEnd ? i >= z.sStart && i <= z.sEnd : i >= z.sStart || i <= z.sEnd;
-      out[i] = inZone ? 1 : 0;
+  /** Пилот, чьи потери показывает карта: самый медленный из неопорных. */
+  const lossOf = useMemo(() => {
+    const others = a.drivers.filter(d => d.id !== ref.id);
+    return others.length
+      ? others.reduce((p, q) => (p.stats.median >= q.stats.median ? p : q))
+      : null;
+  }, [a, ref]);
+
+  const mapValues = useMemo(
+    () => (lossOf ? deltaRate(ctx.T(lossOf), ctx.T(ref)) : V(ref)),
+    [lossOf, ref, ctx, V],
+  );
+
+  const mapRange = useMemo(() => {
+    let lo = Infinity, hi = -Infinity;
+    for (const v of mapValues) { if (!isFinite(v)) continue; lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    return { lo, hi, absMax: Math.max(Math.abs(lo), Math.abs(hi)) };
+  }, [mapValues]);
+
+  const mapCornerLabel = useMemo(() => {
+    if (!lossOf) {
+      return (ci: number) => `${V(ref)[Math.round(a.corners[ci].sApex) % a.grid.length].toFixed(0)}`;
     }
-    return out;
-  }, [shown, a, ref, V]);
+    return (ci: number) => {
+      const zi = a.zones.findIndex(z => z.corner.id === a.corners[ci].id);
+      if (zi < 0) return null;
+      const dt = Z(lossOf)[zi].tZone - Z(ref)[zi].tZone;
+      return `${dt >= 0 ? '+' : '−'}${Math.abs(dt).toFixed(2)}`;
+    };
+  }, [lossOf, a, ref, Z, V]);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_470px] items-start">
@@ -83,17 +110,22 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
           </div>
         </div>
 
+        <div className="px-4 pb-3 -mt-1 text-[11px] text-[var(--muted)] leading-relaxed max-w-[720px]">
+          {METRICS.find(([m]) => m === metric)![3]}
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-[12px] num border-collapse">
             <thead>
               <tr className="text-[var(--muted)] text-[11px]">
                 <th className="text-left font-normal px-4 py-2 sticky left-0 bg-[var(--panel)]">пов.</th>
-                <th className="text-right font-normal px-2 py-2">радиус</th>
                 {a.drivers.map(d => (
-                  <th key={d.id} className="text-right font-normal px-3 py-2 min-w-[100px]">
+                  <th key={d.id} className="text-right font-normal px-3 py-2 min-w-[110px]">
                     <span className="inline-flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full" style={{ background: color(d) }} />
-                      <span className="truncate max-w-[120px]">{name(d)}</span>
+                      <span className="truncate max-w-[160px]">
+                        {name(d)}<span className="text-[var(--muted-2)] font-normal">, {unit}</span>
+                      </span>
                     </span>
                   </th>
                 ))}
@@ -112,9 +144,11 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
                       style={pinned === i ? { boxShadow: 'inset 0 -1px 0 currentColor' } : undefined}>
                       {z.corner.name}
                     </span>
-                    <span className="text-[var(--muted-2)] ml-1.5 text-[10px]">{z.corner.dir === 'L' ? 'лев' : 'прав'}</span>
+                    <span className="text-[var(--muted-2)] ml-2 text-[10px]"
+                      title="Направление и наименьший радиус дуги — насколько поворот крутой">
+                      {z.corner.dir === 'L' ? 'лев' : 'прав'} · R {z.corner.radius.toFixed(0)} м
+                    </span>
                   </td>
-                  <td className="px-2 py-2 text-right text-[var(--muted)]">{z.corner.radius.toFixed(0)} м</td>
                   {cells.map((c, k) => {
                     const isRef = a.drivers[k].id === ref.id;
                     const good = lowerBetter ? c.d < 0 : c.d > 0;
@@ -131,13 +165,15 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
                         <span className="relative">
                           {isRef
                             ? <span className="text-[var(--muted)]">
-                                {metric === 'dt' ? `${c.raw.toFixed(3)} с` : num(c.v, digits)}
+                                {metric === 'dt' ? c.raw.toFixed(3) : num(c.v, digits)}
                               </span>
                             : <>
                               {metric !== 'dt' && <span className="text-[var(--muted)] mr-1.5">{num(c.v, digits)}</span>}
-                              <span style={{ color: Math.abs(c.d) < 1e-9 ? 'var(--muted)' : good ? 'var(--good)' : 'var(--bad)' }}>
-                                {delta(c.d, digits)}
-                              </span>
+                              {isFinite(c.d) && (
+                                <span style={{ color: Math.abs(c.d) < 1e-9 ? 'var(--muted)' : good ? 'var(--good)' : 'var(--bad)' }}>
+                                  {delta(c.d, digits)}
+                                </span>
+                              )}
                             </>}
                         </span>
                       </td>
@@ -145,16 +181,20 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
                   })}
                 </tr>
               ))}
-              <tr className="border-t border-[var(--line)] font-medium">
-                <td className="px-4 py-2.5 sticky left-0 bg-[var(--panel)]">круг</td>
-                <td />
-                {a.drivers.map((d, k) => (
-                  <td key={d.id} className="px-3 py-2.5 text-right">
-                    {d.id === ref.id ? <span className="text-[var(--muted)]">опорный</span>
-                      : <span style={{ color: deltaColor(totals[k]) }}>{delta(totals[k])}</span>}
+              {metric === 'dt' && (
+                <tr className="border-t border-[var(--line)] font-medium">
+                  <td className="px-4 py-2.5 sticky left-0 bg-[var(--panel)]">
+                    круг
+                    <span className="text-[var(--muted-2)] ml-2 text-[10px] font-normal">сумма всех зон</span>
                   </td>
-                ))}
-              </tr>
+                  {a.drivers.map((d, k) => (
+                    <td key={d.id} className="px-3 py-2.5 text-right">
+                      {d.id === ref.id ? <span className="text-[var(--muted)]">опорный</span>
+                        : <span style={{ color: deltaColor(totals[k]) }}>{delta(totals[k])}</span>}
+                    </td>
+                  ))}
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -165,11 +205,22 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
           <CornerDetail ctx={ctx} zoneIndex={shown} />
         ) : (
           <div className="panel p-4">
-            <div className="text-[13px] font-medium mb-1">Наведите на строку</div>
-            <div className="text-[11px] text-[var(--muted)] mb-3">
-              Кликните, чтобы закрепить разбор поворота и не терять его при движении мышью
+            <div className="text-[13px] font-medium mb-0.5">
+              {lossOf ? 'Где теряется время' : 'Трасса'}
             </div>
-            <TrackMap a={a} mode="speed" values={mapValues} cursorS={ctx.cursorS} height={300} />
+            <div className="text-[11px] text-[var(--muted)] mb-2">
+              Наведите на строку — откроется разбор поворота. Клик закрепит его.
+            </div>
+            <TrackMap a={a} mode={lossOf ? 'delta' : 'speed'} values={mapValues}
+              cornerLabel={mapCornerLabel} cursorS={ctx.cursorS} height={340} />
+            <MapLegend mode={lossOf ? 'delta' : 'speed'} min={mapRange.lo}
+              max={lossOf ? mapRange.absMax * 100 : mapRange.hi}
+              unit={lossOf ? 'с на 100 м' : 'км/ч'} />
+            <div className="text-[11px] text-[var(--muted-2)] mt-2 leading-relaxed">
+              {lossOf
+                ? `Красное — где «${name(lossOf)}» теряет время относительно «${name(ref)}», зелёное — где выигрывает. Числа у поворотов — потеря в зоне, с.`
+                : `Цвет и числа у поворотов — скорость в апексе, км/ч.`}
+            </div>
           </div>
         )}
       </div>

@@ -177,12 +177,18 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
   const cs = Math.round(c.sStart) % N;
 
   const metrics = [
-    { label: 'скорость на входе', get: (d: DriverResult) => V(d)[cs], unit: 'км/ч', d: 1, up: true },
-    { label: 'минимальная скорость', get: (d: DriverResult) => Z(d)[zoneIndex].vMin, unit: 'км/ч', d: 1, up: true },
-    { label: 'скорость на выходе', get: (d: DriverResult) => V(d)[ce], unit: 'км/ч', d: 1, up: true },
-    { label: 'точка замедления', get: (d: DriverResult) => Z(d)[zoneIndex].sBrake, unit: 'м', d: 0, up: true },
-    { label: 'длина траектории', get: (d: DriverResult) => ctx.ZP(d)[zoneIndex], unit: 'м', d: 1, up: false },
-    { label: 'время в зоне', get: (d: DriverResult) => Z(d)[zoneIndex].tZone, unit: 'с', d: 3, up: false },
+    { label: 'скорость на входе', get: (d: DriverResult) => V(d)[cs], unit: 'км/ч', d: 1, up: true,
+      hint: 'Скорость в точке, где начинается дуга поворота.' },
+    { label: 'минимальная скорость', get: (d: DriverResult) => Z(d)[zoneIndex].vMin, unit: 'км/ч', d: 1, up: true,
+      hint: 'Самая низкая скорость внутри поворота. Обычно приходится позже геометрического апекса.' },
+    { label: 'скорость на выходе', get: (d: DriverResult) => V(d)[ce], unit: 'км/ч', d: 1, up: true,
+      hint: 'Скорость там, где дуга заканчивается. От неё зависит вся следующая прямая.' },
+    { label: 'точка замедления', get: (d: DriverResult) => Z(d)[zoneIndex].sBrake, unit: 'м', d: 0, up: true,
+      hint: 'Где кончается разгон перед этим поворотом. Прочерк — поворот проходится без сброса скорости либо входит в связку с предыдущим.' },
+    { label: 'длина траектории', get: (d: DriverResult) => ctx.ZP(d)[zoneIndex], unit: 'м', d: 1, up: false,
+      hint: 'Сколько метров реально проехал внутри этой зоны по своей траектории.' },
+    { label: 'время в зоне', get: (d: DriverResult) => Z(d)[zoneIndex].tZone, unit: 'с', d: 3, up: false,
+      hint: 'Время от начала зоны до её конца. Сумма по всем зонам равна времени круга.' },
   ];
 
   return (
@@ -211,7 +217,7 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
 
       <CornerMap ctx={ctx} zoneIndex={zoneIndex} />
       <div className="text-[10px] text-[var(--muted-2)] -mt-2">
-        Линия — усреднённая траектория, заливка — разброс по кругам (±1σ).
+        Линия — усреднённая траектория, заливка — обычный разброс линии по кругам.
         Залитая точка — начало замедления, кольцо — реальная низшая точка скорости.
         Пунктирный кружок — геометрический апекс: они часто не совпадают.
       </div>
@@ -239,8 +245,10 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
           {metrics.map(m => {
             const rv = m.get(ref);
             return (
-              <tr key={m.label} className="border-t border-[var(--line-soft)]">
-                <td className="py-1.5 text-[var(--muted)]">{m.label}</td>
+              <tr key={m.label} className="border-t border-[var(--line-soft)]" title={m.hint}>
+                <td className="py-1.5 text-[var(--muted)] decoration-dotted decoration-[var(--muted-2)] underline underline-offset-[3px] cursor-help">
+                  {m.label}
+                </td>
                 {a.drivers.map(dr => {
                   const v = m.get(dr);
                   const dd = v - rv;

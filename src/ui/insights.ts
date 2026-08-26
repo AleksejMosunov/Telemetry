@@ -39,7 +39,7 @@ export function buildInsights(a: Analysis, refId: string, name: (d: DriverResult
         kind: 'key',
         title: `${name(d)}: траектория ${dPath > 0 ? 'длиннее' : 'короче'} на ${Math.abs(dPath).toFixed(1)} м за круг`,
         body: `${d.stats.medianPath.toFixed(1)} м против ${ref.stats.medianPath.toFixed(1)} м у «${name(ref)}» — ` +
-          `разница ${(Math.abs(dPath) / sigma).toFixed(1)}σ, это не разброс.` +
+          `это в ${(Math.abs(dPath) / sigma).toFixed(1)} раза больше обычного разброса между кругами, то есть не случайность.` +
           (isFinite(rMed) && rMed > 0.4
             ? ` В этой сессии длина траектории — самый предсказательный показатель: внутри одного стинта она связана со временем круга с r=${rMed.toFixed(2)}.`
             : ''),

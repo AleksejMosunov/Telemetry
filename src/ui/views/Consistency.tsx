@@ -97,7 +97,7 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
         <span className="w-2.5 h-2.5 rounded-full" style={{ background: color(dc.d) }} />
         <span className="text-[13px] font-medium">{name(dc.d)}</span>
         <span className="text-[11px] text-[var(--muted)] num">
-          {dc.laps.length} кругов · σ круга {dc.d.stats.sd.toFixed(3)} с
+          {dc.laps.length} кругов · разброс ±{dc.d.stats.sd.toFixed(3)} с
         </span>
       </div>
 
@@ -155,8 +155,8 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
             ))}
 
             <div className="text-[10px] text-[var(--muted-2)] mt-2 num" style={{ paddingLeft: 92 }}>
-              шкала ±{dc.scale.toFixed(3)} с · белая рамка — выброс более 2σ (вероятно трафик или ошибка)
-              · полоса справа — круг целиком
+              шкала ±{dc.scale.toFixed(3)} с · белая рамка — круг, где отклонение вдвое больше
+              обычного разброса (вероятно трафик или ошибка) · полоса справа — круг целиком
             </div>
           </div>
         </div>
@@ -191,7 +191,8 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
                 <tr className="text-[10px] text-[var(--muted-2)]">
                   <th className="text-left font-normal pb-1">пов.</th>
                   <th className="text-right font-normal pb-1">на столе</th>
-                  <th className="text-right font-normal pb-1">разброс σ</th>
+                  <th className="text-right font-normal pb-1"
+                    title="Насколько по-разному получается этот поворот от круга к кругу">разброс</th>
                   <th className="text-right font-normal pb-1">попаданий</th>
                 </tr>
               </thead>
@@ -207,7 +208,7 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
                         style={{ width: `${(z.onTheTable / maxTable) * 100}%`, background: 'var(--bad)' }} />
                       <span className="relative">{z.onTheTable.toFixed(3)} с</span>
                     </td>
-                    <td className="py-1 text-right text-[var(--muted)]">{z.sd.toFixed(3)}</td>
+                    <td className="py-1 text-right text-[var(--muted)]">±{z.sd.toFixed(3)}</td>
                     <td className="py-1 text-right"
                       style={{ color: z.hitRate < 0.15 ? 'var(--bad)' : z.hitRate > 0.35 ? 'var(--good)' : 'var(--muted)' }}>
                       {num(z.hitRate * 100, 0)}%
