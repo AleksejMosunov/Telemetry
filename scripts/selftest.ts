@@ -1,5 +1,10 @@
 import { readFileSync } from 'fs';
-import { analyze } from '../src/core/pipeline';
+import { gzipSync } from 'zlib';
+import { analyze, analyzeSessions } from '../src/core/pipeline';
+import { parseAimCsv } from '../src/core/parse';
+import { packSession, unpackSession } from '../src/core/pack';
+import { matchTracks, type TrackSignature } from '../src/core/trackid';
+import { sessionFingerprint } from '../src/core/identity';
 import { buildInsights } from '../src/ui/insights';
 
 const DIR = '/Users/macbook/Documents/karting/telemetry/csv';
@@ -98,6 +103,70 @@ const susp = a.drivers.flatMap(d => d.laps.filter(l => l.suspect).map(l => `${d.
 checks.push(['детектор помех не сыплет ложными срабатываниями',
   susp.length <= Math.ceil(0.1 * a.drivers.reduce((n, d) => n + d.laps.filter(l => l.clean).length, 0)),
   susp.length ? susp.join(', ') : 'подозрительных кругов нет']);
+
+// Компактный формат хранилища: то, что уехало в облако и вернулось, обязано
+// давать ровно тот же анализ, иначе архив сезона будет врать.
+const sess = FILES.map(f => parseAimCsv(f.text, f.name));
+const packed = sess.map(packSession);
+const rt = analyzeSessions(packed.map(unpackSession));
+const gzTotal = packed.reduce((n, b) => n + gzipSync(Buffer.from(b), { level: 9 }).length, 0);
+const csvTotal = FILES.reduce((n, f) => n + f.text.length, 0);
+checks.push(['компактный формат: та же трасса',
+  rt.corners.length === a.corners.length && Math.abs(rt.track.length - a.track.length) < 0.1, '']);
+let dLap = 0, dZone = 0;
+for (let i = 0; i < a.drivers.length; i++) {
+  dLap = Math.max(dLap, Math.abs(rt.drivers[i].stats.best - a.drivers[i].stats.best),
+    Math.abs(rt.drivers[i].stats.median - a.drivers[i].stats.median));
+  for (let z = 0; z < a.zones.length; z++) {
+    dZone = Math.max(dZone, Math.abs(rt.drivers[i].zoneMed[z].tZone - a.drivers[i].zoneMed[z].tZone));
+  }
+}
+checks.push(['компактный формат: времена кругов не поехали', dLap < 1e-9, `макс ${dLap.toExponential(1)} с`]);
+checks.push(['компактный формат: времена зон в пределах шума GPS', dZone < 0.01, `макс ${dZone.toFixed(4)} с`]);
+checks.push(['компактный формат: выигрыш по объёму не меньше 20x',
+  csvTotal / gzTotal > 20,
+  `${(csvTotal / 1048576).toFixed(1)} МБ CSV -> ${(gzTotal / 1024).toFixed(0)} КБ (${(csvTotal / gzTotal).toFixed(0)}x)`]);
+
+// Опознание трассы. Каждую сессию разбираем отдельно — так и будет при загрузке
+// по одной. Проверяем и что своё сходится, и что чужое отсекается.
+const sigA = analyzeSessions([sess[0]]).signature;
+const sigB = analyzeSessions([sess[1]]).signature;
+const nOut = sigB.outline.length / 2;
+const shifted = (frac: number, off: number): TrackSignature => {
+  const v = { ...sigB, outline: [...sigB.outline] };
+  const from = Math.floor(nOut * 0.4), to = from + Math.max(1, Math.floor(nOut * frac));
+  for (let i = from; i < to; i++) v.outline[i * 2] += off;
+  return v;
+};
+const reversed: TrackSignature = { ...sigA, outline: [] };
+for (let i = sigA.outline.length / 2 - 1; i >= 0; i--) {
+  reversed.outline.push(sigA.outline[i * 2], sigA.outline[i * 2 + 1]);
+}
+const restarted: TrackSignature = {
+  ...sigB,
+  outline: [...sigB.outline.slice(Math.floor(nOut * 0.3) * 2), ...sigB.outline.slice(0, Math.floor(nOut * 0.3) * 2)],
+};
+const real = matchTracks(sigA, sigB);
+const tcase = (name: string, m: ReturnType<typeof matchTracks>, want: boolean) =>
+  checks.push([`трасса: ${name}`, m.sameConfig === want, `разброс ${m.spread.toFixed(1)} м`]);
+tcase('две сессии одной трассы — одна конфигурация', real, true);
+tcase('другая линия старта — та же конфигурация', matchTracks(sigA, restarted), true);
+tcase('снос GPS на 4 м не мешает', matchTracks(sigA, { ...sigB, outline: sigB.outline.map((v, i) => (i % 2 === 0 ? v + 4 : v)) }), true);
+tcase('сдвиг в пределах ширины трассы — та же', matchTracks(sigA, shifted(0.10, 6)), true);
+tcase('участок уведён на 10 м — другая', matchTracks(sigA, shifted(0.10, 10)), false);
+tcase('короткий участок уведён на 25 м — другая', matchTracks(sigA, shifted(0.03, 25)), false);
+tcase('обратное направление — другая', matchTracks(sigA, reversed), false);
+tcase('другая площадка — другая', matchTracks(sigA, { ...sigB, lat: sigB.lat + 0.045 }), false);
+checks.push(['трасса: запас между своим и чужим не меньше двукратного',
+  matchTracks(sigA, shifted(0.10, 10)).spread / real.spread > 2,
+  `своё ${real.spread.toFixed(1)} м против чужого ${matchTracks(sigA, shifted(0.10, 10)).spread.toFixed(1)} м`]);
+
+// Опознание сессии
+checks.push(['отпечатки заездов различаются',
+  sessionFingerprint(sess[0]) !== sessionFingerprint(sess[1]) && sessionFingerprint(sess[0]).length > 0,
+  sessionFingerprint(sess[0])]);
+checks.push(['отпечаток не зависит от имени файла',
+  sessionFingerprint(sess[0]) === sessionFingerprint(parseAimCsv(FILES[0].text, 'другое-имя.csv')), '']);
 
 let bad = 0;
 for (const [name, ok, note] of checks) {

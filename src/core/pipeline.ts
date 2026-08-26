@@ -4,6 +4,8 @@ import { splitLaps, cleanLaps, buildCenterline, detectCorners, type Corner, type
 import { makeGrid } from './align';
 import { zonePathLengths, normalAt } from './geometry';
 import { buildLapTrace, buildZones, zoneStats, type Zone, type ZoneStats } from './analysis';
+import { sessionFingerprint } from './identity';
+import { trackSignature, type TrackSignature } from './trackid';
 
 export interface LapInfo {
   index: number; time: number; isIn: boolean;
@@ -53,6 +55,8 @@ export interface DriverResult {
 
 export interface Analysis {
   track: { x: Float64Array; y: Float64Array; curv: Float64Array; length: number; step: number; n: number };
+  /** отпечаток формы трассы — по нему заезд привязывается к конфигурации в базе */
+  signature: TrackSignature;
   corners: Corner[];
   zones: Zone[];
   grid: Float64Array;
@@ -152,24 +156,26 @@ function medianChannel(traces: Float64Array[], N: number): Float64Array {
   return out;
 }
 
-/** Устойчивый ключ заезда: не зависит ни от имени файла, ни от порядка загрузки. */
-function fingerprintOf(s: Session): string {
-  return [s.meta['Racer'], s.meta['Date'], s.meta['Time'], s.meta['Duration'], s.meta['Vehicle']]
-    .filter(Boolean).join('|');
-}
-
-/** @param excluded снятые вручную круги: отпечаток заезда -> номера кругов */
+/** Разбор CSV-файлов и анализ. Обёртка над {@link analyzeSessions}. */
 export function analyze(
   files: { name: string; text: string }[],
   excluded: Record<string, number[]> = {},
 ): Analysis {
+  return analyzeSessions(files.map(f => parseAimCsv(f.text, f.name)), excluded);
+}
+
+/** Анализ уже разобранных сессий — из CSV или из компактного формата хранилища.
+ *  @param excluded снятые вручную круги: отпечаток заезда -> номера кругов */
+export function analyzeSessions(
+  sessions: Session[],
+  excluded: Record<string, number[]> = {},
+): Analysis {
   const warnings: string[] = [];
-  const parsed = files.map(f => {
-    const s = parseAimCsv(f.text, f.name);
+  const parsed = sessions.map(s => {
     const laps = splitLaps(s);
     const clean = cleanLaps(laps);
-    if (!clean.length) throw new Error(`${f.name}: не найдено ни одного полного круга`);
-    return { file: f, s, laps, clean };
+    if (!clean.length) throw new Error(`${s.sourceName}: не найдено ни одного полного круга`);
+    return { s, laps, clean };
   });
 
   // все заезды должны быть на одной трассе
@@ -184,7 +190,7 @@ export function analyze(
   for (const p of parsed.slice(1)) {
     const c = centroid(p);
     const km = Math.hypot((c[0] - c0[0]) * 111, (c[1] - c0[1]) * 111 * Math.cos((c0[0] * Math.PI) / 180));
-    if (km > 2) warnings.push(`${p.file.name}: похоже, это другая трасса (${km.toFixed(1)} км от первой) — сравнение некорректно`);
+    if (km > 2) warnings.push(`${p.s.sourceName}: похоже, это другая трасса (${km.toFixed(1)} км от первой) — сравнение некорректно`);
   }
 
   // осевая линия строится по абсолютно лучшему кругу среди всех заездов
@@ -223,12 +229,12 @@ export function analyze(
   if (!corners.length) warnings.push('Повороты не распознаны — проверьте качество GPS');
 
   const drivers: DriverResult[] = parsed.map((p, di) => {
-    const fp = fingerprintOf(p.s);
+    const fp = sessionFingerprint(p.s);
     const autoClean = new Set(p.clean.map(l => l.index));
     let excl = new Set(excluded[fp] ?? []);
     // Снять можно не всё: если не осталось хотя бы двух кругов, считать нечего.
     if (p.clean.filter(l => !excl.has(l.index)).length < 2) {
-      if (excl.size) warnings.push(`${p.file.name}: снято слишком много кругов — исключения не применены`);
+      if (excl.size) warnings.push(`${p.s.sourceName}: снято слишком много кругов — исключения не применены`);
       excl = new Set();
     }
 
@@ -319,9 +325,9 @@ export function analyze(
       id: `d${di}`,
       fingerprint: fp,
       name: p.s.meta['Racer'] && parsed.length > 1
-        ? `${p.s.meta['Racer']} · ${time24(p.s.meta['Time']) || p.file.name}`
-        : (p.s.meta['Racer'] || p.file.name),
-      fileName: p.file.name,
+        ? `${p.s.meta['Racer']} · ${time24(p.s.meta['Time']) || p.s.sourceName}`
+        : (p.s.meta['Racer'] || p.s.sourceName),
+      fileName: p.s.sourceName,
       meta: p.s.meta,
       laps: lapInfos,
       cleanIdx: lapInfos.map((l, i) => (l.clean ? i : -1)).filter(i => i >= 0),
@@ -346,6 +352,7 @@ export function analyze(
 
   return {
     track: { x: cl.x, y: cl.y, curv: cl.curv, length: cl.length, step: cl.step, n: cl.n },
+    signature: trackSignature(cl),
     corners, zones, grid, drivers, warnings,
   };
 }
