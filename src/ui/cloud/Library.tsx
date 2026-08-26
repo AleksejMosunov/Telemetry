@@ -98,7 +98,8 @@ export function Library({ cloud, picked, onPick, onClose, max }: {
     <Shell title="Библиотека заездов" onClose={onClose} wide>
       <div className="flex items-center gap-2 flex-wrap mb-3 text-[12px]">
         <span className="text-[var(--muted)]">{cloud.team?.name} · {cloud.email}</span>
-        <button onClick={() => signOut()} className="text-[var(--muted-2)] hover:text-[var(--text)] transition">
+        <button onClick={() => { signOut(); onClose(); }}
+          className="text-[var(--muted-2)] hover:text-[var(--text)] transition">
           выйти
         </button>
 

@@ -34,13 +34,26 @@ const fail = (what: string, e: { message: string } | null) => {
 
 // ───────────────────────────── вход ─────────────────────────────
 
+/** Текущий пользователь из сохранённой сессии. Берём getSession, а не getUser:
+ *  первый читает локально, второй ходит на сервер за проверкой токена. */
 export async function currentUser() {
-  const { data } = await supabase().auth.getUser();
-  return data.user;
+  const { data } = await supabase().auth.getSession();
+  return data.session?.user ?? null;
 }
 
-export function onAuthChange(cb: () => void) {
-  const { data } = supabase().auth.onAuthStateChange(() => cb());
+/**
+ * Подписка на вход и выход.
+ *
+ * Колбэк получает почту готовой и НЕ должен сам обращаться к Supabase: внутри
+ * обработчика клиент держит внутреннюю блокировку, и любой его вызов оттуда
+ * повисает — вход застывал на «Минуту…», пока страницу не перезагрузишь.
+ * Поэтому выходим из обработчика немедленно, а работу откладываем на макрозадачу.
+ */
+export function onAuthChange(cb: (email: string | null) => void) {
+  const { data } = supabase().auth.onAuthStateChange((_event, session) => {
+    const email = session?.user.email ?? null;
+    setTimeout(() => cb(email), 0);
+  });
   return () => data.subscription.unsubscribe();
 }
 

@@ -4,6 +4,16 @@ import type { CloudState } from './state';
 
 /** Вход и первый запуск команды. Пока не вошли, приложение работает с файлами
  *  как раньше — облако ничего не блокирует. */
+/**
+ * Регистрация из приложения. Выключено: аккаунты заводит тренер.
+ *
+ * Это лишь интерфейс. Настоящая защита — в самом Supabase: ключ anon лежит
+ * в браузерном бандле, поэтому запрос на регистрацию можно отправить и мимо
+ * приложения. Закрывать надо там: Authentication -> Sign In / Providers ->
+ * Allow new users to sign up. Толку от кнопки, спрятанной только здесь, нет.
+ */
+const ALLOW_SIGNUP = false;
+
 export function Auth({ cloud, onClose }: { cloud: CloudState; onClose: () => void }) {
   const [mode, setMode] = useState<'in' | 'up'>('in');
   const [email, setEmail] = useState('');
@@ -75,11 +85,17 @@ export function Auth({ cloud, onClose }: { cloud: CloudState; onClose: () => voi
       <button disabled={busy || !email || pass.length < 6} onClick={submit} className={btn}>
         {busy ? 'Минуту…' : mode === 'in' ? 'Войти' : 'Создать аккаунт'}
       </button>
-      <button
-        onClick={() => { setMode(m => (m === 'in' ? 'up' : 'in')); setErr(null); setMsg(null); }}
-        className="w-full mt-2 text-[12px] text-[var(--muted)] hover:text-[var(--text)] transition">
-        {mode === 'in' ? 'Аккаунта ещё нет — создать' : 'У меня уже есть аккаунт'}
-      </button>
+      {ALLOW_SIGNUP ? (
+        <button
+          onClick={() => { setMode(m => (m === 'in' ? 'up' : 'in')); setErr(null); setMsg(null); }}
+          className="w-full mt-2 text-[12px] text-[var(--muted)] hover:text-[var(--text)] transition">
+          {mode === 'in' ? 'Аккаунта ещё нет — создать' : 'У меня уже есть аккаунт'}
+        </button>
+      ) : (
+        <div className="text-[11px] text-[var(--muted-2)] mt-2 text-center leading-relaxed">
+          Регистрация закрыта — аккаунты заводит тренер.
+        </div>
+      )}
     </Shell>
   );
 }

@@ -31,17 +31,20 @@ export function useCloud(): CloudState {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    if (!cloudEnabled) return;
+  const clear = useCallback(() => {
+    setTeam(null); setDrivers([]); setConfigs([]); setSessions([]);
+  }, []);
+
+  /** Загрузка справочников под уже известного пользователя. */
+  const load = useCallback(async (mail: string | null) => {
+    setEmail(mail);
+    if (!mail) { clear(); setReady(true); return; }
     setBusy(true);
     try {
-      const user = await currentUser();
-      setEmail(user?.email ?? null);
-      if (!user) { setTeam(null); setDrivers([]); setConfigs([]); setSessions([]); return; }
       const teams = await myTeams();
       const t = teams[0] ?? null;
       setTeam(t);
-      if (!t) { setDrivers([]); setConfigs([]); setSessions([]); return; }
+      if (!t) { clear(); return; }
       const [d, c, s] = await Promise.all([
         listDrivers(t.id), listConfigs(t.id), listSessions(t.id),
       ]);
@@ -52,13 +55,20 @@ export function useCloud(): CloudState {
     } finally {
       setBusy(false); setReady(true);
     }
-  }, []);
+  }, [clear]);
+
+  const refresh = useCallback(async () => {
+    if (!cloudEnabled) return;
+    load((await currentUser())?.email ?? null);
+  }, [load]);
 
   useEffect(() => {
     if (!cloudEnabled) return;
     refresh();
-    return onAuthChange(() => { refresh(); });
-  }, [refresh]);
+    // Почта приходит из события — обращаться к Supabase за ней нельзя,
+    // подробности в onAuthChange.
+    return onAuthChange(mail => { load(mail); });
+  }, [refresh, load]);
 
   return {
     enabled: cloudEnabled, ready, signedIn: Boolean(email), email,

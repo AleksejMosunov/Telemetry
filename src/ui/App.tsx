@@ -30,6 +30,16 @@ export type Excluded = Record<string, number[]>;
 
 const NAME_KEY = 'karting.driverNames';
 const EXCL_KEY = 'karting.excludedLaps';
+const OPEN_KEY = 'karting.openSessions';
+
+/** Что было открыто из библиотеки. Файлы с диска так не сохранить: браузер
+ *  не даёт держать ссылку на файл между перезагрузками. */
+function loadOpen(): string[] {
+  try { return JSON.parse(localStorage.getItem(OPEN_KEY) || '[]'); } catch { return []; }
+}
+function persistOpen(ids: string[]) {
+  try { localStorage.setItem(OPEN_KEY, JSON.stringify(ids)); } catch { /* приватный режим */ }
+}
 
 /** Имена пилотов переживают перезагрузку: ключ — отпечаток заезда, а не порядок файлов. */
 function loadNames(): Record<string, string> {
@@ -100,6 +110,7 @@ export function App() {
   const refIdRef = useRef<string | undefined>(undefined);
   const exclRef = useRef<Excluded>(excl);
   const cloud = useCloud();
+  const gatedRef = useRef(false);
 
   const sourcesRef = useRef<Source[]>([]);
   /** Уже прочитанное содержимое: пересчёт после снятия круга не должен
@@ -114,7 +125,7 @@ export function App() {
   const runAnalysis = useCallback(async (list: Source[], keepRefFp?: string, excluded?: Excluded) => {
     sourcesRef.current = list;
     setSources(list);
-    if (!list.length) { setA(null); setErr(null); return; }
+    if (!list.length) { setA(null); setErr(null); persistOpen([]); return; }
     setBusy(true); setErr(null);
     try {
       const cache = dataCache.current;
@@ -141,6 +152,7 @@ export function App() {
       cloudIdByFp.current = new Map(
         list.filter(s => s.row?.fingerprint).map(s => [s.row!.fingerprint!, s.row!.id]),
       );
+      persistOpen(list.filter(s => s.row).map(s => s.row!.id));
       setA(result);
       const stored = loadNames();
       setNames(Object.fromEntries(result.drivers.map(d => [d.id, stored[d.fingerprint] ?? ''])));
@@ -212,6 +224,7 @@ export function App() {
     const leave = (e: DragEvent) => { if (e.relatedTarget === null) setDrag(false); };
     const drop = (e: DragEvent) => {
       e.preventDefault(); setDrag(false);
+      if (gatedRef.current) { setErr('Войдите, чтобы работать с телеметрией'); return; }
       if (e.dataTransfer?.files.length) addFiles([...e.dataTransfer.files]);
     };
     window.addEventListener('dragover', over);
@@ -223,6 +236,21 @@ export function App() {
       window.removeEventListener('drop', drop);
     };
   }, [addFiles]);
+
+  /** После перезагрузки возвращаем то, что было открыто из библиотеки. */
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current || a || busy) return;
+    if (!cloud.ready || !cloud.signedIn || !cloud.sessions.length) return;
+    restored.current = true;
+    const want = loadOpen();
+    if (!want.length) return;
+    const byId = new Map(cloud.sessions.map(s => [s.id, s]));
+    const rows = want.map(id => byId.get(id)).filter((r): r is SessionRow => Boolean(r));
+    if (rows.length) openFromLibrary(rows);
+  }, [cloud.ready, cloud.signedIn, cloud.sessions, a, busy, openFromLibrary]);
+
+  gatedRef.current = cloud.enabled && cloud.ready && !cloud.signedIn;
 
   const ctx: ViewCtx | null = useMemo(() => {
     if (!a) return null;
@@ -245,6 +273,12 @@ export function App() {
   }, [a, refId, lapMode, cursorS, names, excl, setExcl, busy]);
 
   const cutCount = a ? a.drivers.reduce((n, d) => n + d.laps.filter(l => l.excluded).length, 0) : 0;
+  /** Облако настроено, но пользователь не вошёл: работа с файлами закрыта.
+   *  Это порядок в интерфейсе, а не защита — бандл статический, и разобрать
+   *  собственный файл на своём диске гость технически всё равно смог бы. */
+  const gated = cloud.enabled && cloud.ready && !cloud.signedIn;
+  /** Ещё проверяем сохранённую сессию — не мигаем гостевым экраном. */
+  const checking = cloud.enabled && !cloud.ready;
 
   return (
     <div className="min-h-full flex flex-col">
@@ -341,10 +375,13 @@ export function App() {
                 {cloud.signedIn ? `Библиотека${cloud.sessions.length ? ` (${cloud.sessions.length})` : ''}` : 'Войти'}
               </button>
             )}
-            <button onClick={() => input.current?.click()}
-              className="px-3 py-1.5 rounded-lg border border-[var(--line)] text-xs hover:bg-[var(--panel-2)] transition">
-              {a ? `Добавить файл${sources.length ? ` (${sources.length}/${MAX})` : ''}` : 'Выбрать файлы'}
-            </button>
+            {!gated && (
+              <button onClick={() => input.current?.click()}
+                title="Разовый разбор файла с диска — в библиотеку он не попадёт"
+                className="px-3 py-1.5 rounded-lg border border-[var(--line)] text-xs hover:bg-[var(--panel-2)] transition">
+                {a ? `Добавить файл${sources.length ? ` (${sources.length}/${MAX})` : ''}` : 'Выбрать файлы'}
+              </button>
+            )}
             <input ref={input} type="file" accept=".csv" multiple hidden
               onChange={e => {
                 if (e.target.files) addFiles([...e.target.files]);
@@ -374,8 +411,12 @@ export function App() {
           <div key={i} className="panel p-3 mb-3 border-[#5a4a2b] bg-[#191510] text-[#ffd9a0] text-[13px]">{w}</div>
         ))}
 
-        {busy && !a && <Splash busy />}
-        {!a && !busy && <Splash cloud={cloud.enabled && cloud.signedIn} />}
+        {(busy || checking) && !a && <Splash busy />}
+        {!a && !busy && !checking && (
+          gated
+            ? <Locked onSignIn={() => setPanel('auth')} />
+            : <Splash cloud={cloud.enabled && cloud.signedIn} />
+        )}
 
         {a && ctx && (
           <div style={{ opacity: busy ? 0.55 : 1, transition: 'opacity .15s' }}>
@@ -389,17 +430,37 @@ export function App() {
         )}
       </main>
 
-      {panel === 'auth' && <Auth cloud={cloud} onClose={() => setPanel('none')} />}
-      {panel === 'library' && (
-        <Library cloud={cloud} max={MAX} picked={sources.filter(s => s.row).map(s => s.row!.id)}
-          onPick={openFromLibrary} onClose={() => setPanel('none')} />
-      )}
+      {/* Вышли из аккаунта — библиотеку показывать нечем, возвращаем окно входа. */}
+      {panel !== 'none' && (!cloud.signedIn || !cloud.team)
+        ? <Auth cloud={cloud} onClose={() => setPanel('none')} />
+        : panel === 'library' && (
+          <Library cloud={cloud} max={MAX} picked={sources.filter(s => s.row).map(s => s.row!.id)}
+            onPick={openFromLibrary} onClose={() => setPanel('none')} />
+        )}
 
-      {drag && (
+      {drag && !gated && (
         <div className="fixed inset-0 z-50 bg-[#0a0c10]/85 flex items-center justify-center pointer-events-none">
           <div className="text-lg text-[var(--muted)]">Отпустите файлы</div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Гостевой экран: без входа приложение ничего не разбирает. */
+function Locked({ onSignIn }: { onSignIn: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-28 text-center">
+      <div className="text-[15px] mb-2">Нужен вход</div>
+      <div className="text-[var(--muted)] text-[13px] max-w-md leading-relaxed mb-4">
+        Телеметрия команды хранится в библиотеке заездов. Войдите, чтобы открыть
+        уже загруженные заезды или добавить новые.
+      </div>
+      <button onClick={onSignIn}
+        className="px-4 py-2 rounded-lg bg-[var(--panel-2)] border border-[var(--line)]
+          text-[13px] hover:bg-[#1d222d] transition">
+        Войти
+      </button>
     </div>
   );
 }
@@ -422,7 +483,9 @@ function Splash({ busy, cloud }: { busy?: boolean; cloud?: boolean }) {
             вписываются в шапке и запоминаются на будущее.
             {cloud && (
               <span className="block mt-2">
-                Или откройте уже загруженные — кнопка «Библиотека» в шапке.
+                Файл с диска разбирается разово и в библиотеку не попадает.
+                Чтобы заезд сохранился, грузите его через «Библиотеку» — там же
+                открываются все прежние.
               </span>
             )}
           </div>
