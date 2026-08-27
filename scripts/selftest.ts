@@ -168,6 +168,30 @@ checks.push(['отпечатки заездов различаются',
 checks.push(['отпечаток не зависит от имени файла',
   sessionFingerprint(sess[0]) === sessionFingerprint(parseAimCsv(FILES[0].text, 'другое-имя.csv')), '']);
 
+// ── сектора ───────────────────────────────────────────────────────────────
+const secLen = a.sectors.reduce((p, c) => p + c.length, 0);
+checks.push(['сектора покрывают круг целиком',
+  Math.abs(secLen - a.track.length) < 0.5,
+  `${secLen.toFixed(1)} м против ${a.track.length.toFixed(1)} м`]);
+checks.push(['сектора идут подряд и без дыр',
+  a.sectors.every((x, i) => x.from === (i === 0 ? 0 : a.sectors[i - 1].to + 1))
+  && a.sectors[a.sectors.length - 1].to === a.zones.length - 1, '']);
+
+for (const d of a.drivers) {
+  const secTime = (from: number, to: number) => d.zoneByLap.map(r => {
+    let t = 0; for (let z = from; z <= to; z++) t += r[z];
+    return t;
+  });
+  const bySector = a.sectors.reduce((p, x) => p + Math.min(...secTime(x.from, x.to)), 0);
+  const byZone = Array.from({ length: a.zones.length },
+    (_, z) => Math.min(...d.zoneByLap.map(r => r[z]))).reduce((p, c) => p + c, 0);
+  const bestLap = Math.min(...d.zoneByLap.map(r => r.reduce((p, c) => p + c, 0)));
+  // круг из секторов зажат между суммой лучших зон и лучшим реальным кругом
+  checks.push([`потенциал по секторам между зонным и реальным (${d.name})`,
+    byZone <= bySector + 1e-9 && bySector <= bestLap + 1e-9,
+    `зоны ${byZone.toFixed(3)} ≤ сектора ${bySector.toFixed(3)} ≤ круг ${bestLap.toFixed(3)}`]);
+}
+
 let bad = 0;
 for (const [name, ok, note] of checks) {
   if (!ok) bad++;

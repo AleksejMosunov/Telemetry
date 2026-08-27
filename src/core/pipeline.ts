@@ -3,7 +3,10 @@ import { makeProjector, project } from './geo';
 import { splitLaps, cleanLaps, buildCenterline, detectCorners, type Corner, type Lap } from './track';
 import { makeGrid } from './align';
 import { zonePathLengths, normalAt } from './geometry';
-import { buildLapTrace, buildZones, zoneStats, type Zone, type ZoneStats } from './analysis';
+import {
+  buildLapTrace, buildSectors, buildZones, zoneStats,
+  type Sector, type Zone, type ZoneStats,
+} from './analysis';
 import { sessionFingerprint } from './identity';
 import { trackSignature, type TrackSignature } from './trackid';
 
@@ -59,6 +62,8 @@ export interface Analysis {
   signature: TrackSignature;
   corners: Corner[];
   zones: Zone[];
+  /** Группы зон: на них считается достижимый идеальный круг. */
+  sectors: Sector[];
   grid: Float64Array;
   drivers: DriverResult[];
   warnings: string[];
@@ -226,6 +231,7 @@ export function analyzeSessions(
   const grid = makeGrid(cl.length, 1.0);
   const corners = detectCorners(cl);
   const zones = buildZones(corners, cl.length);
+  const sectors = buildSectors(zones, cl.length);
   if (!corners.length) warnings.push('Повороты не распознаны — проверьте качество GPS');
 
   const drivers: DriverResult[] = parsed.map((p, di) => {
@@ -359,6 +365,6 @@ export function analyzeSessions(
   return {
     track: { x: cl.x, y: cl.y, curv: cl.curv, length: cl.length, step: cl.step, n: cl.n },
     signature: trackSignature(cl),
-    corners, zones, grid, drivers, warnings,
+    corners, zones, sectors, grid, drivers, warnings,
   };
 }

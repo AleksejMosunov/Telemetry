@@ -15,6 +15,10 @@ interface Props {
   cursorS: number | null;
   height?: number;
   onHover?: (s: number | null) => void;
+  /** засечки поперёк трассы: границы секторов и подобное */
+  marks?: Array<{ s: number; label?: string }>;
+  /** клик по трассе отдаёт метр круга — им ставят и снимают границы */
+  onPick?: (s: number) => void;
 }
 
 export function normalAt(a: Analysis, i: number): [number, number] {
@@ -77,7 +81,9 @@ export function lineXY(a: Analysis, lat: Float64Array, idxs: number[]): [number[
   return [xs, ys];
 }
 
-export function TrackMap({ a, mode, values, lines, cornerLabel, cursorS, height = 420, onHover }: Props) {
+export function TrackMap({
+  a, mode, values, lines, cornerLabel, cursorS, height = 420, onHover, marks, onPick,
+}: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const pts = useRef<Float64Array | null>(null);   // экранные координаты осевой, для наведения
@@ -183,6 +189,30 @@ export function TrackMap({ a, mode, values, lines, cornerLabel, cursorS, height 
       }
     }
 
+    if (marks?.length) {
+      for (const m of marks) {
+        const i = ((Math.round(m.s) % n) + n) % n;
+        const [mx, my] = normalAt(a, i);
+        const X = x[i], Y = y[i];
+        ctx.strokeStyle = '#ffd43b'; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(px(X + mx * 9), py(Y + my * 9));
+        ctx.lineTo(px(X - mx * 9), py(Y - my * 9));
+        ctx.stroke();
+        if (m.label) {
+          ctx.font = '600 10px ui-sans-serif, system-ui';
+          const w = ctx.measureText(m.label).width;
+          const lx = px(X + mx * 20), ly = py(Y + my * 20);
+          ctx.fillStyle = 'rgba(10,12,16,0.9)';
+          ctx.beginPath();
+          ctx.roundRect(lx - w / 2 - 4, ly - 8, w + 8, 16, 4);
+          ctx.fill();
+          ctx.fillStyle = '#ffd43b';
+          ctx.fillText(m.label, lx, ly + 0.5);
+        }
+      }
+    }
+
     const [snx, sny] = normalAt(a, 0);
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5;
     ctx.beginPath();
@@ -198,7 +228,21 @@ export function TrackMap({ a, mode, values, lines, cornerLabel, cursorS, height 
         ctx.strokeStyle = '#0a0c10'; ctx.lineWidth = 2; ctx.stroke();
       }
     }
-  }, [a, mode, values, lines, cornerLabel, cursorS, height]);
+  }, [a, mode, values, lines, cornerLabel, cursorS, height, marks]);
+
+  /** Ближайшая к курсору точка осевой линии, в метрах круга. */
+  const nearest = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const s = pts.current;
+    if (!s) return null;
+    const r = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < s.length / 2; i++) {
+      const d = (s[i * 2] - mx) ** 2 + (s[i * 2 + 1] - my) ** 2;
+      if (d < bd) { bd = d; bi = i; }
+    }
+    return bd < 40 * 40 ? bi : null;
+  };
 
   const move = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onHover || !pts.current) return;
@@ -219,7 +263,8 @@ export function TrackMap({ a, mode, values, lines, cornerLabel, cursorS, height 
         ref={ref}
         onMouseMove={move}
         onMouseLeave={() => onHover?.(null)}
-        style={{ display: 'block', cursor: onHover ? 'crosshair' : 'default' }}
+        onClick={onPick ? e => { const i = nearest(e); if (i != null) onPick(i); } : undefined}
+        style={{ display: 'block', cursor: onPick ? 'pointer' : onHover ? 'crosshair' : 'default' }}
       />
     </div>
   );

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ViewCtx } from '../App';
 import type { DriverResult, LapInfo } from '../../core/pipeline';
+import type { Sector } from '../../core/analysis';
 import { lapTime, delta, num, plural } from '../format';
 
 interface ZoneStat {
@@ -18,14 +19,23 @@ interface Row {
   suspect: LapInfo['suspect'];
 }
 
+interface SectorStat {
+  s: Sector;
+  best: number; median: number;
+  onTheTable: number;
+  hitRate: number;
+}
+
 interface DriverConsistency {
   d: DriverResult;
   rows: Row[];          // все круги: и в расчёте, и снятые
   used: number;         // сколько кругов реально участвует
   zones: ZoneStat[];
+  sectors: SectorStat[];
   sigma: Float64Array;  // устойчивый разброс по зонам
   scale: number;
-  potential: number;    // круг из собственных лучших зон
+  potential: number;      // круг из лучших отдельных зон — оптимистичный потолок
+  potentialSec: number;   // круг из лучших секторов — достижимый
   bestLapTime: number;
   medianLapTime: number;
   suspects: number[];   // номера кругов, похожих на помеху и ещё не снятых
@@ -54,6 +64,24 @@ function analyse(ctx: ViewCtx): DriverConsistency[] {
       });
     }
 
+    // Сектор — несколько поворотов подряд. Внутри него компромисс «быстрый вход —
+    // испорченный выход» уже оплачен, поэтому собранный из секторов круг достижим,
+    // в отличие от суммы лучших одиночных зон.
+    const sectors: SectorStat[] = ctx.sectors.map(s => {
+      const col = d.zoneByLap.map(r => {
+        let t = 0;
+        for (let z = s.from; z <= s.to; z++) t += r[z];
+        return t;
+      });
+      const best = Math.min(...col);
+      const m = med(col);
+      return {
+        s, best, median: m,
+        onTheTable: m - best,
+        hitRate: col.filter(v => v <= best + 0.05).length / col.length,
+      };
+    });
+
     const mkDev = (r: ArrayLike<number>) => Array.from({ length: nz }, (_, z) => r[z] - zones[z].median);
     const rows: Row[] = d.zoneByLap.map((r, i) => {
       const dev = mkDev(r);
@@ -81,11 +109,12 @@ function analyse(ctx: ViewCtx): DriverConsistency[] {
       .filter(v => isFinite(v)).map(Math.abs).sort((p, q) => p - q);
 
     return {
-      d, rows, zones,
+      d, rows, zones, sectors,
       used: clean.length,
       sigma: d.zoneSigma,
       scale: Math.max(0.02, flat[Math.floor(flat.length * 0.9)] ?? 0.05),
       potential: zones.reduce((p, q) => p + q.best, 0),
+      potentialSec: sectors.reduce((p, q) => p + q.best, 0),
       bestLapTime: Math.min(...clean.map(l => l.time)),
       medianLapTime: med(clean.map(l => l.time)),
       suspects: clean.filter(l => l.suspect).map(l => l.index),
@@ -118,15 +147,19 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
   const { name, color, exclOf, setExcl, busy } = ctx;
   const [hi, setHi] = useState<{ lap: number; z: number } | null>(null);
   const worst = [...dc.zones].sort((p, q) => q.onTheTable - p.onTheTable);
-  const gap = dc.medianLapTime - dc.potential;
-  const gapFromBest = dc.bestLapTime - dc.potential;
+  const gap = dc.medianLapTime - dc.potentialSec;
+  const gapFromBest = dc.bestLapTime - dc.potentialSec;
+  const gapZone = dc.medianLapTime - dc.potential;
   const maxTable = Math.max(...dc.zones.map(z => z.onTheTable), 0.001);
   const inPlay = dc.rows.filter(r => !r.excluded);
   const bestLapIndex = inPlay.reduce((p, q) => (q.time < p.time ? q : p), inPlay[0]).lapIndex;
   const maxTotal = Math.max(...inPlay.map(l => Math.abs(l.total)), 0.001);
   const cut = exclOf(dc.d);
   // 102 — колонка круга, 32 клетка + 3 зазор, 8 + 54 — полоса «круг целиком»
-  const gridW = 102 + 3 + dc.zones.length * 35 - 3 + 8 + 54;
+  // клетки секторов раздвинуты: видно, из каких кусков собирается достижимый круг
+  const SEP = 9;
+  const secEnd = new Set(dc.sectors.map(x => x.s.to));
+  const gridW = 102 + 3 + dc.zones.length * 35 - 3 + (dc.sectors.length - 1) * SEP + 8 + 54;
   const nCut = dc.rows.filter(r => r.excluded).length;
 
   const toggle = (lapIndex: number) => {
@@ -177,9 +210,29 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
           {/* ширина ровно по сетке: иначе длинная подпись снизу растягивает колонку
               и между картой и правой панелью зияет пустота */}
           <div style={{ width: gridW }}>
+            {dc.sectors.length > 1 && (
+              <div className="flex gap-[3px]" style={{ paddingLeft: 106 }}>
+                {dc.sectors.map(x => {
+                  const n = x.s.to - x.s.from + 1;
+                  return (
+                    <div key={x.s.id}
+                      className="text-[10px] text-[var(--muted-2)] text-center num rounded-t-[3px]"
+                      style={{
+                        width: n * 32 + (n - 1) * 3,
+                        marginRight: x.s.id === dc.sectors.length ? 0 : SEP,
+                        background: 'rgba(255,255,255,0.035)',
+                      }}>
+                      {x.s.name}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             <div className="flex gap-[3px] mb-1" style={{ paddingLeft: 106 }}>
               {dc.zones.map(z => (
-                <div key={z.z} className="text-[10px] text-[var(--muted-2)] text-center num" style={{ width: 32 }}>
+                <div key={z.z} className="text-[10px] text-[var(--muted-2)] text-center num"
+                  style={{ width: 32, marginRight: secEnd.has(z.z) && z.z !== dc.zones.length - 1 ? SEP : 0 }}>
                   {z.name}
                 </div>
               ))}
@@ -230,6 +283,7 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
                         className="rounded-[3px] cursor-default transition-transform hover:scale-110"
                         style={{
                           width: 32, height: 15,
+                          marginRight: secEnd.has(zi) && zi !== l.dev.length - 1 ? SEP : 0,
                           background: t > 0
                             ? `rgba(255,107,107,${0.12 + 0.72 * t})`
                             : `rgba(81,207,102,${0.12 + 0.72 * -t})`,
@@ -261,11 +315,11 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
 
         <div className="flex flex-col gap-3 min-w-[280px]">
           <div className="rounded-lg p-3" style={{ background: 'rgba(255,212,59,0.07)' }}>
-            <div className="text-[11px] text-[var(--muted)] mb-1">Потенциал круга</div>
-            <div className="flex items-baseline gap-2">
-              <span className="num text-xl font-semibold">{lapTime(dc.potential)}</span>
+            <div className="text-[11px] text-[var(--muted)] mb-1">Достижимый круг</div>
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="num text-xl font-semibold">{lapTime(dc.potentialSec)}</span>
               <span className="num text-[12px] text-[var(--muted)]">
-                из собственных лучших зон
+                из собственных лучших секторов
               </span>
             </div>
             <div className="text-[12px] leading-relaxed mt-2 text-[var(--muted)]">
@@ -274,11 +328,47 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
               В обычном круге <span className="num text-[var(--text)]">{gap.toFixed(3)} с</span>.
             </div>
             <div className="text-[10px] text-[var(--muted-2)] leading-relaxed mt-2">
-              Это оптимистичный потолок, а не цель: он складывает лучшие зоны из разных кругов,
-              которые не всегда совместимы в одном проезде, и частично ловит удачные замеры.
-              Полезно сравнение между пилотами и слежение за тем, как разрыв сокращается.
+              Сектор — несколько поворотов подряд. Быстрый вход в один поворот часто оплачивается
+              выходом и следующим поворотом, поэтому сумма лучших <i>отдельных</i> поворотов —{' '}
+              <span className="num">{lapTime(dc.potential)}</span> — в одном проезде обычно недостижима:
+              она складывает то, что вместе не едется. Круг из лучших секторов такую сделку уже учитывает.
             </div>
           </div>
+
+          {dc.sectors.length > 1 && (
+            <div>
+              <div className="text-[11px] text-[var(--muted)] mb-1.5">Секторы</div>
+              <table className="w-full text-[11px] num">
+                <thead>
+                  <tr className="text-[10px] text-[var(--muted-2)]">
+                    <th className="text-left font-normal pb-1">сект.</th>
+                    <th className="text-left font-normal pb-1">повороты</th>
+                    <th className="text-right font-normal pb-1">лучший</th>
+                    <th className="text-right font-normal pb-1">на столе</th>
+                    <th className="text-right font-normal pb-1">попаданий</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dc.sectors.map(x => (
+                    <tr key={x.s.id} className="border-t border-[var(--line-soft)]">
+                      <td className="py-1 font-medium">{x.s.name}</td>
+                      <td className="py-1 text-[var(--muted)]">{x.s.label}</td>
+                      <td className="py-1 text-right">{x.best.toFixed(3)}</td>
+                      <td className="py-1 text-right">+{x.onTheTable.toFixed(3)}</td>
+                      <td className="py-1 text-right"
+                        style={{ color: x.hitRate < 0.15 ? 'var(--bad)' : x.hitRate > 0.35 ? 'var(--good)' : 'var(--muted)' }}>
+                        {num(x.hitRate * 100, 0)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="text-[10px] text-[var(--muted-2)] mt-1.5 leading-relaxed">
+                Сектор целиком повторяем куда хуже отдельного поворота — именно поэтому
+                достижимый круг честнее суммы лучших зон.
+              </div>
+            </div>
+          )}
 
           <div>
             <div className="text-[11px] text-[var(--muted)] mb-1.5">
@@ -322,13 +412,14 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
             </div>
           </div>
 
-          <Verdict dc={dc} worst={worst} gap={gap} />
+          <Verdict dc={dc} worst={worst} gap={gapZone} />
         </div>
       </div>
     </div>
   );
 }
 
+/** gap здесь — запас по отдельным зонам: резервы ниже тоже зонные, их надо мерить одной линейкой. */
 function Verdict({ dc, worst, gap }: { dc: DriverConsistency; worst: ZoneStat[]; gap: number }) {
   const top = worst.slice(0, 3).filter(z => z.onTheTable > 0.02);
   const share = top.reduce((p, q) => p + q.onTheTable, 0) / (gap || 1);

@@ -7,7 +7,13 @@ import { Chart } from '../Chart';
 import { lapTime, delta, num, deltaColor } from '../format';
 
 const fmtLapNo = (v: number) => `круг ${v}`;
-import { deltaRate } from '../../core/analysis';
+import { deltaRate, sectorsFromCuts } from '../../core/analysis';
+
+/** Кольцевое расстояние по кругу, м. */
+const ring = (x: number, y: number, L: number) => {
+  const d = Math.abs(x - y) % L;
+  return Math.min(d, L - d);
+};
 
 export function Overview({ ctx }: { ctx: ViewCtx }) {
   const { a, ref, name, color, V, T } = ctx;
@@ -16,6 +22,41 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
   const others = a.drivers.filter(d => d.id !== ref.id);
   const [deltaOf, setDeltaOf] = useState(others[0]?.id ?? ref.id);
   const deltaDriver = a.drivers.find(x => x.id === deltaOf) ?? ref;
+
+  // ── правка границ секторов прямо на карте ────────────────────────────
+  const L = a.track.length;
+  const [editSec, setEditSec] = useState(false);
+  const [saving, setSaving] = useState(false);
+  /** черновик держим в индексах зон: сектор всегда из целых зон */
+  const [draft, setDraft] = useState<number[]>([]);
+
+  const draftSectors = useMemo(
+    () => sectorsFromCuts(a.zones, L, draft.map(i => a.zones[i].sStart / L)),
+    [a, draft, L],
+  );
+
+  const startEdit = () => {
+    setDraft(ctx.sectors.slice(1).map(x => x.from));
+    setEditSec(true);
+  };
+
+  /** Клик по трассе притягивается к ближайшей границе зоны — это середина прямой. */
+  const pickCut = (s: number) => {
+    let best = 1, bd = Infinity;
+    for (let i = 1; i < a.zones.length; i++) {
+      const d = ring(a.zones[i].sStart, s, L);
+      if (d < bd) { bd = d; best = i; }
+    }
+    setDraft(d => (d.includes(best) ? d.filter(x => x !== best) : [...d, best].sort((p, q) => p - q)));
+  };
+
+  const applySectors = async (cuts: number[]) => {
+    setSaving(true);
+    try {
+      await ctx.saveSectors(cuts.length ? cuts.map(i => a.zones[i].sStart / L) : null);
+      setEditSec(false);
+    } finally { setSaving(false); }
+  };
 
   const mapValues = useMemo(
     () => (mode === 'delta' ? deltaRate(T(deltaDriver), T(ref)) : V(ref)),
@@ -88,6 +129,14 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
                   {others.map(d => <option key={d.id} value={d.id}>{name(d)}</option>)}
                 </select>
               )}
+              <button onClick={() => (editSec ? setEditSec(false) : startEdit())}
+                title="Задать границы секторов для этой трассы"
+                className={`px-2.5 py-1 rounded-lg border text-[11px] transition
+                  ${editSec
+                    ? 'border-[#5a4a2b] bg-[#191510] text-[#ffd9a0]'
+                    : 'border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]'}`}>
+                сектора
+              </button>
               <div className="flex rounded-lg border border-[var(--line)] overflow-hidden text-[11px]">
                 {([['speed', 'скорость'], ['delta', 'потери'], ['lines', 'траектории']] as const)
                   .filter(([m]) => m !== 'delta' || others.length)
@@ -100,9 +149,48 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
               </div>
             </div>
           </div>
+          {editSec && (
+            <div className="rounded-lg px-3 py-2 mb-2 text-[12px] leading-relaxed"
+              style={{ background: 'rgba(255,212,59,0.07)' }}>
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-[var(--muted)]">
+                  Клик по трассе ставит или снимает границу сектора. Границу притягивает
+                  к ближайшей середине прямой — резать поворот пополам нечем.
+                </span>
+                <span className="ml-auto flex items-center gap-2">
+                  <button disabled={saving} onClick={() => applySectors(draft)}
+                    className="px-2.5 py-1 rounded-lg border border-[#5a4a2b] bg-[#191510]
+                      text-[#ffd9a0] text-[11px] hover:bg-[#221c12] transition disabled:opacity-40">
+                    Сохранить для трассы
+                  </button>
+                  <button disabled={saving} onClick={() => applySectors([])}
+                    title="Вернуть автоматическую разбивку"
+                    className="px-2.5 py-1 rounded-lg border border-[var(--line)] text-[11px]
+                      text-[var(--muted)] hover:text-[var(--text)] transition disabled:opacity-40">
+                    авто
+                  </button>
+                  <button disabled={saving} onClick={() => setEditSec(false)}
+                    className="text-[11px] text-[var(--muted-2)] hover:text-[var(--text)] transition">
+                    отмена
+                  </button>
+                </span>
+              </div>
+              <div className="num text-[11px] mt-1.5 text-[var(--text)]">
+                {draftSectors.map(x => `${x.name} ${x.label}`).join('  ·  ')}
+                {ctx.sectorCuts
+                  ? <span className="text-[var(--muted-2)]"> · сейчас у трассы свои границы</span>
+                  : <span className="text-[var(--muted-2)]"> · сейчас разбивка автоматическая</span>}
+              </div>
+            </div>
+          )}
+
           <TrackMap a={a} mode={mode} values={mapValues} lines={lines}
-            cornerLabel={cornerLabel} cursorS={hoverS ?? ctx.cursorS}
-            height={440} onHover={setHoverS} />
+            cornerLabel={editSec ? undefined : cornerLabel} cursorS={hoverS ?? ctx.cursorS}
+            height={440} onHover={setHoverS}
+            marks={editSec
+              ? draftSectors.slice(1).map(x => ({ s: x.sStart, label: x.name }))
+              : undefined}
+            onPick={editSec ? pickCut : undefined} />
 
           <MapLegend mode={mode} min={range.lo}
             max={mode === 'speed' ? range.hi : range.absMax * 100}

@@ -3,7 +3,10 @@ import type { Analysis, DriverResult } from '../core/pipeline';
 import { driverColor } from '../core/pipeline';
 import { lapTime, plural } from './format';
 import type { WorkerSource } from '../worker';
-import { downloadSamples, setExclusions, listExclusions, type SessionRow } from '../data/api';
+import {
+  downloadSamples, setExclusions, listExclusions, saveConfigSectors, type SessionRow,
+} from '../data/api';
+import { sectorsFromCuts, type Sector } from '../core/analysis';
 import { useCloud } from './cloud/state';
 import { Auth } from './cloud/Auth';
 import { Library } from './cloud/Library';
@@ -33,6 +36,7 @@ export type Excluded = Record<string, number[]>;
 const NAME_KEY = 'karting.driverNames';
 const EXCL_KEY = 'karting.excludedLaps';
 const OPEN_KEY = 'karting.openSessions';
+const SEC_KEY = 'karting.sectors';
 
 /** Что было открыто из библиотеки. Файлы с диска так не сохранить: браузер
  *  не даёт держать ссылку на файл между перезагрузками. */
@@ -41,6 +45,23 @@ function loadOpen(): string[] {
 }
 function persistOpen(ids: string[]) {
   try { localStorage.setItem(OPEN_KEY, JSON.stringify(ids)); } catch { /* приватный режим */ }
+}
+
+/** Ключ трассы для локального хранения границ секторов: площадка плюс длина круга.
+ *  Для заездов из библиотеки границы живут в базе и общие для команды, а этот
+ *  запасной путь нужен файлам с диска и работе без облака. */
+function trackKey(sig: { lat: number; lon: number; length: number }) {
+  return `${sig.lat.toFixed(3)}|${sig.lon.toFixed(3)}|${Math.round(sig.length / 5)}`;
+}
+function loadLocalSectors(): Record<string, number[]> {
+  try { return JSON.parse(localStorage.getItem(SEC_KEY) || '{}'); } catch { return {}; }
+}
+function persistLocalSectors(key: string, cuts: number[] | null) {
+  try {
+    const all = loadLocalSectors();
+    if (cuts?.length) all[key] = cuts; else delete all[key];
+    localStorage.setItem(SEC_KEY, JSON.stringify(all));
+  } catch { /* приватный режим */ }
 }
 
 /** Имена пилотов переживают перезагрузку: ключ — отпечаток заезда, а не порядок файлов. */
@@ -93,6 +114,12 @@ export interface ViewCtx {
   setExcl: (d: DriverResult, indices: number[]) => void;
   /** идёт пересчёт — на это время клики блокируются */
   busy: boolean;
+  /** действующие сектора: ручные границы трассы, если заданы, иначе автоматические */
+  sectors: Sector[];
+  /** ручные границы этой трассы в долях круга; null — сейчас работает автоматика */
+  sectorCuts: number[] | null;
+  /** сохранить границы для трассы (null — вернуть автоматические) */
+  saveSectors: (cuts: number[] | null) => Promise<void>;
 }
 
 export function App() {
@@ -276,6 +303,48 @@ export function App() {
 
   gatedRef.current = cloud.enabled && cloud.ready && !cloud.signedIn;
 
+  /** Конфигурация трассы, к которой относятся открытые заезды: у неё и живут
+   *  ручные границы секторов. Для файлов с диска её нет — тогда работает
+   *  локальная копия по ключу формы трассы. */
+  const configId = useMemo(
+    () => sources.find(s => s.row?.configId)?.row?.configId ?? null,
+    [sources],
+  );
+  const localKey = a ? trackKey(a.signature) : null;
+
+  const [localSectors, setLocalSectors] = useState<Record<string, number[]>>(loadLocalSectors);
+
+  const sectorCuts = useMemo<number[] | null>(() => {
+    if (!a) return null;
+    const fromCloud = configId
+      ? cloud.configs.find(c => c.id === configId)?.sectors ?? null
+      : null;
+    if (fromCloud?.length) return fromCloud;
+    return (localKey && localSectors[localKey]?.length) ? localSectors[localKey] : null;
+  }, [a, configId, cloud.configs, localKey, localSectors]);
+
+  const sectors = useMemo<Sector[]>(() => {
+    if (!a) return [];
+    return sectorCuts?.length ? sectorsFromCuts(a.zones, a.track.length, sectorCuts) : a.sectors;
+  }, [a, sectorCuts]);
+
+  /** Границы трассы задаёт человек, и дальше они общие: в базе — для команды,
+   *  локально — хотя бы для этого браузера. */
+  const saveSectors = useCallback(async (cuts: number[] | null) => {
+    if (localKey) {
+      persistLocalSectors(localKey, cuts);
+      setLocalSectors(loadLocalSectors());
+    }
+    if (configId && cloud.signedIn) {
+      try {
+        await saveConfigSectors(configId, cuts?.length ? cuts : null);
+        await cloud.refresh();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }, [configId, localKey, cloud.signedIn, cloud.refresh]);
+
   // Курсор меняется на каждое движение мыши. Если бы он входил в этот useMemo,
   // все функции ctx получали бы новую identity, а вслед за ними пересчитывались
   // ряды графиков — отсюда рывки. Поэтому курсор подмешивается отдельно.
@@ -286,6 +355,7 @@ export function App() {
     const idx = (d: DriverResult) => a.drivers.indexOf(d);
     return {
       a, ref, refId: ref.id, lapMode, busy,
+      sectors, sectorCuts, saveSectors,
       name: (d) => (names[d.id]?.trim() ? names[d.id].trim() : d.name),
       color: (d) => driverColor(idx(d)),
       V: (d) => (lapMode === 'best' ? d.bestV : d.medV),
@@ -297,7 +367,7 @@ export function App() {
       exclOf: (d) => excl[d.fingerprint] ?? [],
       setExcl,
     };
-  }, [a, refId, lapMode, names, excl, setExcl, busy]);
+  }, [a, refId, lapMode, names, excl, setExcl, busy, sectors, sectorCuts, saveSectors]);
 
   const ctx: ViewCtx | null = useMemo(
     () => (base ? { ...base, cursorS, setCursorS } : null),

@@ -15,6 +15,8 @@ export interface TrackConfigRow {
   trackId: string; trackName: string;
   length: number;
   signature: TrackSignature;
+  /** ручные границы секторов в долях круга; null — считать автоматически */
+  sectors: number[] | null;
 }
 
 export interface SessionRow {
@@ -152,12 +154,19 @@ async function rememberAlias(teamId: string, alias: string, driverId: string) {
 // ───────────────────────────── трассы ─────────────────────────────
 
 export async function listConfigs(teamId: string): Promise<TrackConfigRow[]> {
-  const { data, error } = await supabase()
-    .from('track_configs')
-    .select('id, name, length_m, signature, tracks!inner(id, name, team_id)')
-    .eq('tracks.team_id', teamId);
+  type Res = { data: Array<Record<string, unknown>> | null; error: { code?: string; message: string } | null };
+  const ask = (cols: string) => supabase()
+    .from('track_configs').select(cols).eq('tracks.team_id', teamId) as unknown as Promise<Res>;
+
+  let res = await ask('id, name, length_m, signature, sectors, tracks!inner(id, name, team_id)');
+  // Колонка sectors появилась позже схемы: пока миграция не применена, работаем
+  // без неё, а не роняем всю библиотеку.
+  if (res.error?.code === '42703') {
+    res = await ask('id, name, length_m, signature, tracks!inner(id, name, team_id)');
+  }
+  const { data, error } = res;
   fail('Не удалось получить список трасс', error);
-  return (data ?? []).map((r) => {
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
     const t = r.tracks as unknown as { id: string; name: string };
     return {
       id: r.id as string,
@@ -166,8 +175,16 @@ export async function listConfigs(teamId: string): Promise<TrackConfigRow[]> {
       trackName: t.name,
       length: r.length_m as number,
       signature: r.signature as TrackSignature,
+      sectors: (r.sectors as number[] | null) ?? null,
     };
   });
+}
+
+/** Границы секторов трассы: их задаёт человек, и дальше они общие для команды. */
+export async function saveConfigSectors(id: string, cuts: number[] | null) {
+  const { error } = await supabase().from('track_configs')
+    .update({ sectors: cuts }).eq('id', id);
+  fail('Не удалось сохранить сектора', error);
 }
 
 /** Новая конфигурация: либо на существующей площадке, либо на новой. */
@@ -192,6 +209,7 @@ export async function createConfig(
   return {
     id: data!.id as string, name: data!.name as string,
     trackId, trackName, length: data!.length_m as number, signature: sig,
+    sectors: null,
   };
 }
 

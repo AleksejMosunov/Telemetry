@@ -58,6 +58,112 @@ export function buildZones(corners: Corner[], length: number): Zone[] {
   });
 }
 
+export interface Sector {
+  id: number;
+  name: string;        // «S1»
+  label: string;       // «T1–T3» — какие повороты внутри
+  from: number; to: number;   // индексы зон, включительно
+  sStart: number; sEnd: number;
+  length: number;      // м
+}
+
+/**
+ * Сектор — несколько подряд идущих зон.
+ *
+ * Как единица «идеального круга» он честнее отдельного поворота: быстрый вход
+ * часто оплачивается выходом и следующим поворотом, и сумма лучших зон из разных
+ * кругов складывает то, что в одном проезде несовместимо. Внутри сектора эта
+ * сделка уже учтена, поэтому собранный из секторов круг реально достижим.
+ *
+ * Границы проводим по границам зон: они и так лежат на серединах прямых, где
+ * карт идёт ровно, а значит время замера там устойчивее всего.
+ */
+function zoneLen(zones: Zone[], length: number, i: number) {
+  const d = zones[i].sEnd - zones[i].sStart;
+  return d < 0 ? d + length : d;
+}
+
+function makeSector(zones: Zone[], length: number, from: number, to: number, id: number): Sector {
+  let len = 0;
+  for (let k = from; k <= to; k++) len += zoneLen(zones, length, k);
+  return {
+    id, name: `S${id}`,
+    label: from === to
+      ? zones[from].corner.name
+      : `${zones[from].corner.name}–${zones[to].corner.name}`,
+    from, to,
+    sStart: zones[from].sStart, sEnd: zones[to].sEnd,
+    length: len,
+  };
+}
+
+/** Кольцевое расстояние между точками круга, м. */
+function ringDist(a: number, b: number, length: number) {
+  const d = Math.abs(a - b) % length;
+  return Math.min(d, length - d);
+}
+
+/**
+ * Границы секторов, заданные вручную: доли длины круга [0..1).
+ *
+ * Каждую притягиваем к ближайшей границе зоны — сектор обязан состоять из целых
+ * зон, иначе времена в нём нечем сложить, да и резать поворот пополам незачем.
+ * Начало круга всегда граница, поэтому в cuts хранятся только внутренние.
+ */
+export function sectorsFromCuts(zones: Zone[], length: number, cuts: number[]): Sector[] {
+  const nz = zones.length;
+  const snapped = cuts.map(c => {
+    const target = ((c % 1) + 1) % 1 * length;
+    let best = 1, bestD = Infinity;
+    for (let i = 1; i < nz; i++) {
+      const d = ringDist(zones[i].sStart, target, length);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  });
+  const starts = [0, ...new Set(snapped.filter(i => i > 0 && i < nz))].sort((p, q) => p - q);
+  return starts.map((from, k) =>
+    makeSector(zones, length, from, (starts[k + 1] ?? nz) - 1, k + 1));
+}
+
+/** Обратно: границы секторов в долях круга — в таком виде они и хранятся у трассы. */
+export function cutsOfSectors(sectors: Sector[], zones: Zone[], length: number): number[] {
+  return sectors.slice(1).map(s => zones[s.from].sStart / length);
+}
+
+export function buildSectors(zones: Zone[], length: number, perSector = 3.5): Sector[] {
+  const nz = zones.length;
+  const lenOf = (i: number) => {
+    const d = zones[i].sEnd - zones[i].sStart;
+    return d < 0 ? d + length : d;
+  };
+  const mk = (from: number, to: number, id: number) => makeSector(zones, length, from, to, id);
+
+  if (nz < 4) return [mk(0, nz - 1, 1)];
+  const k = Math.max(2, Math.min(5, Math.round(nz / perSector)));
+
+  // границы — по долям длины круга, но обязательно по границе зоны
+  const cum: number[] = [0];
+  for (let i = 0; i < nz; i++) cum.push(cum[i] + lenOf(i));
+  const total = cum[nz];
+
+  const cuts: number[] = [0];
+  for (let j = 1; j < k; j++) {
+    const target = (j * total) / k;
+    let best = cuts[cuts.length - 1] + 1;
+    let bestD = Infinity;
+    // граница не может совпасть с предыдущей и должна оставить место следующим
+    for (let i = cuts[cuts.length - 1] + 1; i <= nz - (k - j); i++) {
+      const d = Math.abs(cum[i] - target);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    cuts.push(best);
+  }
+  cuts.push(nz);
+
+  return Array.from({ length: k }, (_, j) => mk(cuts[j], cuts[j + 1] - 1, j + 1));
+}
+
 export interface ZoneStats {
   zone: Zone;
   tZone: number;      // время в зоне, с
