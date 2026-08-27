@@ -5,6 +5,15 @@ import { deltaRate } from '../../core/analysis';
 import { CornerDetail } from './CornerDetail';
 import { delta, num, deltaColor } from '../format';
 
+/** Отметки на круге сравниваем по кольцу: у поворота на старт/финише разность
+ *  иначе получилась бы в длину круга. */
+function ring(v: number, r: number, length: number) {
+  let d = v - r;
+  if (d > length / 2) d -= length;
+  if (d < -length / 2) d += length;
+  return { v, raw: v, d };
+}
+
 const METRICS = [
   ['dt', 'потеря времени', 'с',
    'Сколько времени пилот теряет или выигрывает в зоне относительно опорного. Сумма по всем зонам равна дельте круга.'],
@@ -16,6 +25,10 @@ const METRICS = [
    'Скорость в момент входа в поворот, до начала дуги.'],
   ['brake', 'точка замедления', 'м',
    'Отметка на круге, в метрах от старт/финиша, где кончается разгон и начинается замедление перед этим поворотом. Меньше — тормозит раньше. Прочерк значит, что точки замедления нет вообще: поворот либо проходится без сброса скорости, либо входит в связку и торможение относилось к предыдущему.'],
+  ['smin', 'низшая точка', 'м',
+   'Где внутри поворота скорость самая низкая, в метрах от старт/финиша. Это то самое кольцо на карте зоны. Раньше низшая точка — раньше можно открываться.'],
+  ['accel', 'точка разгона', 'м',
+   'Где после низшей точки скорость снова пошла вверх — то есть где карт поехал. Между точкой замедления и точкой разгона он не ускоряется, и чем короче этот участок, тем лучше. Прочерк значит, что разгон в пределах зоны так и не начался.'],
 ] as const;
 type Metric = typeof METRICS[number][0];
 
@@ -37,12 +50,9 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
           return { v: ve, raw: ve, d: ve - V(ref)[Math.round(z.corner.sEnd) % a.grid.length] };
         }
         case 'ventry': return { v: zs.vEntry, raw: zs.vEntry, d: zs.vEntry - rs.vEntry };
-        case 'brake': {
-          let dd = zs.sBrake - rs.sBrake;
-          if (dd > a.track.length / 2) dd -= a.track.length;
-          if (dd < -a.track.length / 2) dd += a.track.length;
-          return { v: zs.sBrake, raw: zs.sBrake, d: dd };
-        }
+        case 'brake': return ring(zs.sBrake, rs.sBrake, a.track.length);
+        case 'smin': return ring(zs.sMin, rs.sMin, a.track.length);
+        case 'accel': return ring(zs.sAccel, rs.sAccel, a.track.length);
       }
     });
     return { z, i, cells };
@@ -56,8 +66,11 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
   const maxAbs = Math.max(0.001, ...rows.flatMap(r => r.cells.map(c => Math.abs(metric === 'dt' ? c.d : 0))));
 
   const unit = METRICS.find(([m]) => m === metric)![2];
-  const digits = metric === 'dt' ? 3 : metric === 'brake' ? 0 : 1;
-  const lowerBetter = metric === 'dt' || metric === 'brake';
+  const isMark = metric === 'brake' || metric === 'smin' || metric === 'accel';
+  const digits = metric === 'dt' ? 3 : isMark ? 0 : 1;
+  // Отметки на круге сравниваются как «раньше — зелёное»: для низшей точки и
+  // разгона это прямо хорошо, для торможения так было заведено с самого начала.
+  const lowerBetter = metric === 'dt' || isMark;
 
   /** Пилот, чьи потери показывает карта: самый медленный из неопорных. */
   const lossOf = useMemo(() => {

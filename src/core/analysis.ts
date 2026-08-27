@@ -171,6 +171,8 @@ export interface ZoneStats {
   vEntry: number;     // скорость на входе в поворот
   vExit: number;      // скорость на выходе
   sBrake: number;     // точка начала замедления, м от начала круга
+  sMin: number;       // низшая точка скорости, м от начала круга — она же кольцо на карте
+  sAccel: number;     // где после низшей точки скорость пошла вверх, м от начала круга
   latApex: number;    // боковое положение в апексе, м
 }
 
@@ -225,10 +227,22 @@ export function zoneStats(tr: LapTrace, zones: Zone[], grid: Float64Array): Zone
     const flatOut = peak - vMin[zi] < 2;
     const stillBraking = iPeak === from || iPeak === iMin[zi];
 
+    // Начало разгона: где после низшей точки скорость устойчиво пошла вверх.
+    // Порог в 1 км/ч отсекает дрожание на «полке» минимальной скорости — у карта
+    // она нередко тянется на пару десятков метров, и голый argmin там случаен.
+    let iAcc = -1;
+    walk(iMin[zi], b, i => {
+      if (iAcc >= 0 || tr.v[i] - vMin[zi] < 1) return;
+      const j = (i + 5) % N;
+      if (tr.v[j] > tr.v[i]) iAcc = i;
+    });
+
     return {
       zone: z, tZone, vMin: vMin[zi],
       vEntry: tr.v[ca], vExit: tr.v[cb],
       sBrake: flatOut || stillBraking ? NaN : grid[iPeak],
+      sMin: grid[iMin[zi]],
+      sAccel: iAcc >= 0 ? grid[iAcc] : NaN,
       latApex: tr.lat[ap],
     };
   });
