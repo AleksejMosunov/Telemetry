@@ -197,20 +197,26 @@ for (const d of a.drivers) {
 for (const d of a.drivers) {
   const u = Array.from(d.unwindByZone);
   const found = u.filter(v => isFinite(v));
-  checks.push([`точка распрямления найдена во всех поворотах (${d.name})`,
-    found.length === a.zones.length,
-    `${found.length} из ${a.zones.length}`]);
-  checks.push([`точка распрямления в разумных пределах (${d.name})`,
-    found.every(v => v >= 0 && v <= 160),
-    `${Math.min(...found).toFixed(0)}–${Math.max(...found).toFixed(0)} м от апекса`]);
+  // Прочерк — законный ответ: в связке карт не распрямляется до следующего поворота.
+  // А вот значение за входом в следующий поворот означало бы, что поиск его перескочил.
+  checks.push([`точка распрямления не выходит за следующий поворот (${d.name})`,
+    u.every((v, i) => {
+      if (!isFinite(v)) return true;
+      let win = a.zones[(i + 1) % a.zones.length].corner.sStart - a.zones[i].corner.sApex;
+      if (win < 0) win += a.track.length;
+      return v >= 0 && v <= win;
+    }),
+    `${found.length} из ${a.zones.length} поворотов со значением`]);
 }
-// Разница между пилотами в T6 — та самая находка, ради которой метрика и делалась.
+// Регрессия на конкретный баг: до требования удержания метрика ловила в шпильке T6
+// мгновенный сброс дуги на +4 м и рисовала несуществующую разницу в 30 м между
+// пилотами. Настоящее распрямление там — за 25 м после апекса, и оно у обоих одно.
 {
   const t6 = a.zones.findIndex(z => z.corner.name === 'T6');
   const vals = a.drivers.map(d => d.unwindByZone[t6]);
-  checks.push(['T6 разделяет пилотов по точке распрямления',
-    t6 >= 0 && Math.abs(vals[0] - vals[1]) >= 20,
-    vals.map(v => `${v.toFixed(0)} м`).join(' против ')]);
+  checks.push(['T6: распрямление не срабатывает на сбросе дуги в середине шпильки',
+    t6 >= 0 && vals.every(v => v >= 25),
+    vals.map(v => `${v.toFixed(0)} м`).join(', ')]);
 }
 
 let bad = 0;
