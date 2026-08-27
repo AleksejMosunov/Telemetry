@@ -39,7 +39,9 @@ export interface DriverResult {
   bestIdx: number;
   stats: DriverStats;
   /** траектории чистых кругов на общей сетке дистанции */
-  traces: { lapIndex: number; v: Float64Array; lat: Float64Array; t: Float64Array }[];
+  traces: {
+    lapIndex: number; v: Float64Array; lat: Float64Array; t: Float64Array; hop: Float64Array;
+  }[];
   medV: Float64Array; medT: Float64Array; medLat: Float64Array;
   /** разброс траектории по кругам, м (СКО на каждом метре) */
   medLatSd: Float64Array;
@@ -259,7 +261,7 @@ export function analyzeSessions(
         pathLength: tr.pathLength, corrections: corrections(p.s, l),
       });
       if (auto && !isExcluded) {
-        traces.push({ lapIndex: l.index, v: tr.v, lat: tr.lat, t: tr.t });
+        traces.push({ lapIndex: l.index, v: tr.v, lat: tr.lat, t: tr.t, hop: tr.hop });
         zoneByLap.push(Float64Array.from(zoneStats(tr, zones, grid).map(z => z.tZone)));
       } else if (isExcluded) {
         excludedRows.push({
@@ -306,6 +308,7 @@ export function analyzeSessions(
     const medT = medianTimeTrace(traces, N);
     const medV = medianChannel(traces.map(t => t.v), N);
     const medLat = medianChannel(traces.map(t => t.lat), N);
+    const medHop = medianChannel(traces.map(t => t.hop), N);
 
     const bestLapIndex = cleanInfos.reduce((a, b) => (a.time <= b.time ? a : b)).index;
     const bi = traces.findIndex(t => t.lapIndex === bestLapIndex);
@@ -318,7 +321,7 @@ export function analyzeSessions(
     // Усреднённый круг — синтетический: медиана по каждому метру.
     // Раньше зоны считались по одному «представительному» реальному кругу,
     // из-за чего таблица поворотов расходилась с графиками.
-    const medTrace = { lap: bestLap, t: medT, v: medV, lat: medLat, pathLength: 0 };
+    const medTrace = { lap: bestLap, t: medT, v: medV, lat: medLat, hop: medHop, pathLength: 0 };
 
     // Длину траектории в зоне усредняем по РЕАЛЬНЫМ кругам: усреднение самой линии
     // сглаживает рыскание, а именно оно и даёт лишние метры.

@@ -8,6 +8,7 @@ export interface LapTrace {
   t: Float64Array;      // время от старта круга, на сетке дистанции
   v: Float64Array;      // скорость, км/ч
   lat: Float64Array;    // боковое смещение от осевой, м
+  hop: Float64Array;    // тряска: высокочастотная вертикаль, g (NaN — канала нет)
   pathLength: number;   // реально пройденная дистанция, м
 }
 
@@ -17,22 +18,45 @@ export function buildLapTrace(
 ): LapTrace {
   const latC = ch(s, 'GPS Latitude'), lonC = ch(s, 'GPS Longitude');
   const spd = ch(s, 'GPS Speed'), tim = ch(s, 'Time');
+  // Вертикальный акселерометр есть не во всех логах и не во всех сохранённых
+  // заездах — без него тряска просто не считается.
+  let vert: Float64Array | null = null;
+  try { vert = ch(s, 'VerticalAcc'); } catch { vert = null; }
+
   const n = lap.i1 - lap.i0;
   const xs = new Float64Array(n), ys = new Float64Array(n);
   const vv = new Float64Array(n), tt = new Float64Array(n);
+  const hh = new Float64Array(n);
   let pathLength = 0;
   for (let k = 0; k < n; k++) {
     const i = lap.i0 + k;
     const [x, y] = project(cl.proj, latC[i], lonC[i]);
     xs[k] = x; ys[k] = y; vv[k] = spd[i]; tt[k] = tim[i] - lap.tStart;
     if (k > 0) pathLength += Math.hypot(x - xs[k - 1], y - ys[k - 1]);
+    // Отклонение отсчёта от соседей — это и есть быстрая часть сигнала: медленные
+    // изменения (наклон корпуса, перегрузка в дуге) через такой фильтр не проходят.
+    hh[k] = vert && i > 0 && i < vert.length - 1
+      ? Math.abs(vert[i] - (vert[i - 1] + vert[i + 1]) / 2)
+      : NaN;
   }
+  // огибающая по ~0.3 с: интересен уровень тряски, а не отдельный удар
+  const env = new Float64Array(n);
+  const w = Math.max(1, Math.round(0.15 * (Number(s.meta['Sample Rate']) || 20)));
+  for (let k = 0; k < n; k++) {
+    let sum = 0, cnt = 0;
+    for (let j = Math.max(0, k - w); j <= Math.min(n - 1, k + w); j++) {
+      if (isFinite(hh[j])) { sum += hh[j]; cnt++; }
+    }
+    env[k] = cnt ? sum / cnt : NaN;
+  }
+
   const pr = projectOntoCenterline(xs, ys, cl);
   return {
     lap,
     t: resampleByS(pr.s, tt, grid),
     v: resampleByS(pr.s, vv, grid),
     lat: resampleByS(pr.s, pr.lat, grid),
+    hop: resampleByS(pr.s, env, grid),
     pathLength,
   };
 }
@@ -173,6 +197,7 @@ export interface ZoneStats {
   sBrake: number;     // точка начала замедления, м от начала круга
   sMin: number;       // низшая точка скорости, м от начала круга — она же кольцо на карте
   sAccel: number;     // где после низшей точки скорость пошла вверх, м от начала круга
+  hop: number;        // средний уровень тряски в зоне, g (NaN — канала нет)
   latApex: number;    // боковое положение в апексе, м
 }
 
@@ -237,12 +262,16 @@ export function zoneStats(tr: LapTrace, zones: Zone[], grid: Float64Array): Zone
       if (tr.v[j] > tr.v[i]) iAcc = i;
     });
 
+    let hopSum = 0, hopCnt = 0;
+    walk(a, b, i => { if (isFinite(tr.hop[i])) { hopSum += tr.hop[i]; hopCnt++; } });
+
     return {
       zone: z, tZone, vMin: vMin[zi],
       vEntry: tr.v[ca], vExit: tr.v[cb],
       sBrake: flatOut || stillBraking ? NaN : grid[iPeak],
       sMin: grid[iMin[zi]],
       sAccel: iAcc >= 0 ? grid[iAcc] : NaN,
+      hop: hopCnt ? hopSum / hopCnt : NaN,
       latApex: tr.lat[ap],
     };
   });
