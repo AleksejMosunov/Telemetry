@@ -8,6 +8,7 @@ interface ZoneStat {
   z: number; name: string;
   best: number; median: number; sd: number;
   onTheTable: number;   // медиана минус собственный лучший — сколько теряется обычно
+  inBest: number;       // потеряно в лучшем круге относительно своего лучшего
   hitRate: number;      // доля кругов в пределах 0.05 с от своего лучшего
 }
 
@@ -22,7 +23,8 @@ interface Row {
 interface SectorStat {
   s: Sector;
   best: number; median: number;
-  onTheTable: number;
+  onTheTable: number;   // обычный круг против собственного лучшего в этом секторе
+  inBest: number;       // сколько осталось на столе в самом лучшем круге
   hitRate: number;
 }
 
@@ -48,6 +50,8 @@ function analyse(ctx: ViewCtx): DriverConsistency[] {
   return a.drivers.map(d => {
     const clean = d.laps.filter(l => l.clean);
     const nz = a.zones.length;
+    // Лучший круг заезда: относительно него и считаем, сколько ещё лежит на столе.
+    const bestI = clean.reduce((bi, l, i) => (l.time < clean[bi].time ? i : bi), 0);
 
     const zones: ZoneStat[] = [];
     for (let z = 0; z < nz; z++) {
@@ -60,6 +64,7 @@ function analyse(ctx: ViewCtx): DriverConsistency[] {
         best, median: m,
         sd: Math.sqrt(col.reduce((p, q) => p + (q - mean) ** 2, 0) / col.length),
         onTheTable: m - best,
+        inBest: col[bestI] - best,
         hitRate: col.filter(v => v <= best + 0.05).length / col.length,
       });
     }
@@ -78,6 +83,7 @@ function analyse(ctx: ViewCtx): DriverConsistency[] {
       return {
         s, best, median: m,
         onTheTable: m - best,
+        inBest: col[bestI] - best,
         hitRate: col.filter(v => v <= best + 0.05).length / col.length,
       };
     });
@@ -108,14 +114,19 @@ function analyse(ctx: ViewCtx): DriverConsistency[] {
     const flat = rows.filter(r => !r.excluded).flatMap(r => r.dev)
       .filter(v => isFinite(v)).map(Math.abs).sort((p, q) => p - q);
 
+    const bestLap = Math.min(...clean.map(l => l.time));
+
     return {
       d, rows, zones, sectors,
       used: clean.length,
       sigma: d.zoneSigma,
       scale: Math.max(0.02, flat[Math.floor(flat.length * 0.9)] ?? 0.05),
-      potential: zones.reduce((p, q) => p + q.best, 0),
-      potentialSec: sectors.reduce((p, q) => p + q.best, 0),
-      bestLapTime: Math.min(...clean.map(l => l.time)),
+      // Не сумма лучших кусков: она живёт в «зонных» секундах, которые из-за
+      // интерполяции по сетке расходятся с отсечками круга на пару сотых.
+      // Считаем от реального лучшего круга, вычитая то, что в нём отыгрывается.
+      potential: bestLap - zones.reduce((p, q) => p + q.inBest, 0),
+      potentialSec: bestLap - sectors.reduce((p, q) => p + q.inBest, 0),
+      bestLapTime: bestLap,
       medianLapTime: med(clean.map(l => l.time)),
       suspects: clean.filter(l => l.suspect).map(l => l.index),
     };
@@ -147,9 +158,11 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
   const { name, color, exclOf, setExcl, busy } = ctx;
   const [hi, setHi] = useState<{ lap: number; z: number } | null>(null);
   const worst = [...dc.zones].sort((p, q) => q.onTheTable - p.onTheTable);
-  const gap = dc.medianLapTime - dc.potentialSec;
-  const gapFromBest = dc.bestLapTime - dc.potentialSec;
-  const gapZone = dc.medianLapTime - dc.potential;
+  // Обе величины — суммы по секторам, а не разности времён круга: медиана круга
+  // и сумма медиан секторов — разные вещи (в каждом круге просаживается свой кусок).
+  const gap = dc.sectors.reduce((p, x) => p + x.onTheTable, 0);
+  const gapFromBest = dc.sectors.reduce((p, x) => p + x.inBest, 0);
+  const gapZone = dc.zones.reduce((p, x) => p + x.onTheTable, 0);
   const maxTable = Math.max(...dc.zones.map(z => z.onTheTable), 0.001);
   const inPlay = dc.rows.filter(r => !r.excluded);
   const bestLapIndex = inPlay.reduce((p, q) => (q.time < p.time ? q : p), inPlay[0]).lapIndex;
@@ -323,9 +336,10 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
               </span>
             </div>
             <div className="text-[12px] leading-relaxed mt-2 text-[var(--muted)]">
-              Лучший реальный круг <span className="num text-[var(--text)]">{lapTime(dc.bestLapTime)}</span> —
-              даже в нём <span className="num text-[var(--text)]">{gapFromBest.toFixed(3)} с</span> лежит на столе.
-              В обычном круге <span className="num text-[var(--text)]">{gap.toFixed(3)} с</span>.
+              Это лучший реальный круг <span className="num text-[var(--text)]">{lapTime(dc.bestLapTime)}</span>,
+              в котором каждый сектор проехан как собственный лучший: даже в нём
+              осталось <span className="num text-[var(--text)]">{gapFromBest.toFixed(3)} с</span>.
+              В обычном круге секторы теряют <span className="num text-[var(--text)]">{gap.toFixed(3)} с</span>.
             </div>
             <div className="text-[10px] text-[var(--muted-2)] leading-relaxed mt-2">
               Сектор — несколько поворотов подряд. Быстрый вход в один поворот часто оплачивается
@@ -338,13 +352,21 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
           {dc.sectors.length > 1 && (
             <div>
               <div className="text-[11px] text-[var(--muted)] mb-1.5">Секторы</div>
-              <table className="w-full text-[11px] num">
+              <div className="scroll-x">
+              <table className="w-full min-w-[360px] text-[11px] num">
                 <thead>
                   <tr className="text-[10px] text-[var(--muted-2)]">
                     <th className="text-left font-normal pb-1">сект.</th>
                     <th className="text-left font-normal pb-1">повороты</th>
                     <th className="text-right font-normal pb-1">лучший</th>
-                    <th className="text-right font-normal pb-1">на столе</th>
+                    <th className="text-right font-normal pb-1"
+                      title="Насколько обычный проезд сектора медленнее собственного лучшего">
+                      обычно
+                    </th>
+                    <th className="text-right font-normal pb-1"
+                      title="Сколько осталось на столе в самом лучшем круге заезда">
+                      в лучшем круге
+                    </th>
                     <th className="text-right font-normal pb-1">попаданий</th>
                   </tr>
                 </thead>
@@ -356,16 +378,32 @@ function DriverBlock({ dc, ctx }: { dc: DriverConsistency; ctx: ViewCtx }) {
                       <td className="py-1 text-right">{x.best.toFixed(3)}</td>
                       <td className="py-1 text-right">+{x.onTheTable.toFixed(3)}</td>
                       <td className="py-1 text-right"
+                        style={{ color: x.inBest < 0.02 ? 'var(--good)' : 'var(--text)' }}>
+                        +{x.inBest.toFixed(3)}
+                      </td>
+                      <td className="py-1 text-right"
                         style={{ color: x.hitRate < 0.15 ? 'var(--bad)' : x.hitRate > 0.35 ? 'var(--good)' : 'var(--muted)' }}>
                         {num(x.hitRate * 100, 0)}%
                       </td>
                     </tr>
                   ))}
+                  <tr className="border-t border-[var(--line)] font-medium">
+                    <td className="py-1" colSpan={2}>итого</td>
+                    <td className="py-1 text-right text-[var(--muted-2)]">—</td>
+                    <td className="py-1 text-right">+{gap.toFixed(3)}</td>
+                    <td className="py-1 text-right">+{gapFromBest.toFixed(3)}</td>
+                    <td />
+                  </tr>
                 </tbody>
               </table>
+              </div>
               <div className="text-[10px] text-[var(--muted-2)] mt-1.5 leading-relaxed">
-                Сектор целиком повторяем куда хуже отдельного поворота — именно поэтому
-                достижимый круг честнее суммы лучших зон.
+                Две колонки отвечают на разные вопросы. «Обычно» — сколько сектор теряет
+                в рядовом круге; сумма этих потерь и есть запас обычного круга.
+                «В лучшем круге» — что осталось несобранным даже в лучшем проезде: там
+                удачные секторы уже случились, поэтому чисел почти нет, а весь остаток
+                собран в одном-двух местах. Сектор целиком повторяем куда хуже отдельного
+                поворота — потому достижимый круг и честнее суммы лучших зон.
               </div>
             </div>
           )}
