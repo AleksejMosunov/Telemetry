@@ -168,7 +168,7 @@ export function Upload({ cloud, files, onClose, onDone }: {
               onKeyDown={e => { if (e.key === 'Enter') addDriver(); }}
               placeholder="добавить пилота"
               className="bg-[var(--panel-2)] border border-[var(--line)] rounded-lg px-3 py-1.5
-                text-[12px] outline-none focus:border-[var(--muted-2)] w-[200px]" />
+                text-[12px] outline-none focus:border-[var(--muted-2)] w-full sm:w-[200px]" />
             <button onClick={addDriver} disabled={!newDriver.trim()}
               className="px-3 py-1.5 rounded-lg border border-[var(--line)] text-[12px]
                 hover:bg-[var(--panel-2)] transition disabled:opacity-40">добавить</button>
@@ -297,5 +297,5 @@ function Row({ it, cloud, patch }: {
 }
 
 const sel = 'bg-[var(--panel-2)] border border-[var(--line)] rounded px-2 py-1.5 text-[12px] '
-  + 'outline-none focus:border-[var(--muted-2)] min-w-[160px]';
+  + 'outline-none focus:border-[var(--muted-2)] min-w-0 sm:min-w-[160px]';
 const inp = sel + ' placeholder:text-[var(--muted-2)]';

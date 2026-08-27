@@ -100,13 +100,15 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
               Зоны покрывают круг целиком — потери суммируются точно в дельту круга. Клик по строке открывает разбор поворота
             </div>
           </div>
-          <div className="flex rounded-lg border border-[var(--line)] overflow-hidden text-[11px]">
+          <div className="scroll-x max-w-full -mx-1 px-1">
+          <div className="flex w-max rounded-lg border border-[var(--line)] overflow-hidden text-[11px]">
             {METRICS.map(([m, label]) => (
               <button key={m} onClick={() => setMetric(m)}
                 className={`px-2.5 py-1 transition whitespace-nowrap ${metric === m ? 'bg-[var(--panel-2)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}>
                 {label}
               </button>
             ))}
+          </div>
           </div>
         </div>
 

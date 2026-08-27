@@ -51,7 +51,8 @@ export function Findings({ ctx }: { ctx: ViewCtx }) {
       <div className="flex flex-col gap-3 xl:sticky xl:top-[122px]">
         <div className="panel p-4">
           <div className="text-[13px] font-medium mb-3">Сводка</div>
-          <table className="w-full text-[12px] num">
+          <div className="scroll-x">
+          <table className="w-full min-w-[280px] text-[12px] num">
             <thead>
               <tr className="text-[10px] text-[var(--muted-2)]">
                 <th className="text-left font-normal pb-1.5">пилот</th>
@@ -82,6 +83,7 @@ export function Findings({ ctx }: { ctx: ViewCtx }) {
               ))}
             </tbody>
           </table>
+          </div>
           <div className="text-[10px] text-[var(--muted-2)] mt-2 leading-relaxed">
             Круг — медианный, то есть обычный, а не лучший. Разброс — насколько круги
             разлетаются вокруг него: в двух третях кругов пилот укладывается в эту величину.

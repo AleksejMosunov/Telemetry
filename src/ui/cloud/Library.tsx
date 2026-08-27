@@ -130,7 +130,7 @@ export function Library({ cloud, picked, onPick, onClose, max }: {
       {tab === 'sessions' && cloud.sessions.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap mb-3 pb-3 border-b border-[var(--line-soft)]">
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="пилот"
-            className={`${fld} w-[150px]`} />
+            className={`${fld} w-full sm:w-[150px]`} />
           <select value={cfg} onChange={e => setCfg(e.target.value)} className={fld}>
             <option value="">все трассы</option>
             {cloud.configs.map(c => (
@@ -191,15 +191,17 @@ export function Library({ cloud, picked, onPick, onClose, max }: {
                   const full = !on && sel.length >= max;
                   return (
                     <div key={s.id} onClick={() => !full && toggle(s.id)}
-                      className={`group flex items-center gap-3 px-3 py-2 rounded-lg border transition
+                      className={`group flex items-center gap-x-3 gap-y-0.5 flex-wrap px-3 py-2 rounded-lg border transition
                         ${on ? 'border-[var(--line)] bg-[var(--panel-2)]' : 'border-transparent hover:bg-white/[0.03]'}
                         ${full ? 'opacity-40 cursor-default' : 'cursor-pointer'}`}>
                       <span className={`w-4 h-4 rounded border shrink-0 flex items-center justify-center text-[10px]
                         ${on ? 'border-[var(--text)] bg-[var(--text)] text-[#0a0c10]' : 'border-[var(--muted-2)]'}`}>
                         {on ? '✓' : ''}
                       </span>
-                      <span className="text-[13px] w-[160px] truncate">{s.driverName ?? '— без пилота —'}</span>
-                      <span className="text-[11px] text-[var(--muted)] num w-[130px]">
+                      <span className="text-[13px] min-w-0 flex-1 sm:flex-none sm:w-[160px] truncate">
+                        {s.driverName ?? '— без пилота —'}
+                      </span>
+                      <span className="text-[11px] text-[var(--muted)] num sm:w-[130px]">
                         {s.recordedAt
                           ? new Date(s.recordedAt).toLocaleString('ru', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
                           : '—'}
@@ -292,7 +294,7 @@ function Manage({ cloud }: { cloud: CloudState }) {
                 run(() => createDriver(cloud.team!.id, name).then(() => undefined));
               }
             }}
-            placeholder="имя нового пилота" className={`${fld} w-[200px]`} />
+            placeholder="имя нового пилота" className={`${fld} w-full sm:w-[200px]`} />
           <button
             disabled={!add.trim() || !cloud.team}
             onClick={() => {

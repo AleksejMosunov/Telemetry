@@ -133,7 +133,8 @@ export function Shell({ title, onClose, children, wide }: {
     <div className="fixed inset-0 z-50 bg-[#0a0c10]/80 backdrop-blur-sm flex items-start justify-center overflow-y-auto py-10"
       onClick={onClose}>
       <div onClick={e => e.stopPropagation()}
-        className={`panel p-5 ${wide ? 'w-[min(920px,92vw)]' : 'w-[min(400px,92vw)]'}`}>
+        className={`panel p-4 sm:p-5 max-h-[92vh] overflow-y-auto
+          ${wide ? 'w-[min(920px,94vw)]' : 'w-[min(400px,94vw)]'}`}>
         <div className="flex items-center mb-3">
           <span className="text-[14px] font-medium">{title}</span>
           <button onClick={onClose}

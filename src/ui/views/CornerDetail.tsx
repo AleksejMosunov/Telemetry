@@ -229,7 +229,8 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
         <Chart data={chart.data} series={chart.series} height={140} bands={bands} fmt={fmtSpeedV} />
       </div>
 
-      <table className="w-full text-[12px] num">
+      <div className="scroll-x -mx-1 px-1">
+      <table className="w-full min-w-[420px] text-[12px] num">
         <thead>
           <tr className="text-[10px] text-[var(--muted)]">
             <th className="text-left font-normal pb-1.5" />
@@ -270,6 +271,7 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
           })}
         </tbody>
       </table>
+      </div>
 
       {others.map(d => (
         <div key={d.id} className="rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.028)' }}>

@@ -315,20 +315,21 @@ export function App() {
   return (
     <div className="min-h-full flex flex-col">
       <header className="sticky top-0 z-20 border-b border-[var(--line)] bg-[#0a0c10]/95 backdrop-blur">
-        <div className="max-w-[1500px] mx-auto px-5 py-3 flex items-center gap-4 flex-wrap">
+        <div className="max-w-[1500px] mx-auto px-3 sm:px-5 py-2.5 sm:py-3 flex items-center gap-2 sm:gap-4 flex-wrap">
           <div className="flex items-baseline gap-2 shrink-0">
             <span className="font-semibold tracking-tight">Телеметрия</span>
             <span className="text-[var(--muted-2)] text-xs">картинг</span>
           </div>
 
           {a && (
-            <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 grow shrink order-3 sm:order-none
+              basis-full sm:basis-0 scroll-x">
               {a.drivers.map((d, i) => (
                 <div
                   key={d.id}
                   onClick={() => setRefId(d.id)}
                   title="Сделать опорным — от него считаются все дельты"
-                  className={`group flex items-center gap-2 pl-2 pr-1.5 py-1.5 rounded-lg border cursor-pointer transition
+                  className={`group flex items-center gap-2 shrink-0 pl-2 pr-1.5 py-1.5 rounded-lg border cursor-pointer transition
                     ${d.id === refId ? 'border-[var(--line)] bg-[var(--panel-2)]' : 'border-transparent hover:bg-[var(--panel)]'}`}
                 >
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: driverColor(i) }} />
@@ -343,7 +344,7 @@ export function App() {
                         persistName(d.fingerprint, e.target.value);
                       }}
                       onClick={e => e.stopPropagation()}
-                      className="bg-transparent outline-none text-[13px] font-medium w-[150px] rounded-sm
+                      className="bg-transparent outline-none text-[13px] font-medium w-[118px] sm:w-[150px] rounded-sm
                         border-b border-dashed border-transparent hover:border-[var(--muted-2)]
                         focus:border-solid focus:border-[var(--text)]
                         placeholder:text-[var(--muted)] placeholder:font-normal transition-colors"
@@ -369,7 +370,7 @@ export function App() {
             </div>
           )}
 
-          <div className="flex items-center gap-2 shrink-0 ml-auto">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap ml-auto">
             {busy && a && (
               <span className="flex items-center gap-1.5 text-[11px] text-[var(--muted)]">
                 <span className="w-3 h-3 rounded-full border border-[var(--line)] border-t-[var(--text)] animate-spin" />
@@ -391,7 +392,8 @@ export function App() {
                 {(['median', 'best'] as const).map(m => (
                   <button key={m} onClick={() => setLapMode(m)}
                     className={`px-3 py-1.5 transition ${lapMode === m ? 'bg-[var(--panel-2)] text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}>
-                    {m === 'median' ? 'усреднённый круг' : 'лучший круг'}
+                    <span className="sm:hidden">{m === 'median' ? 'средний' : 'лучший'}</span>
+                    <span className="hidden sm:inline">{m === 'median' ? 'усреднённый круг' : 'лучший круг'}</span>
                   </button>
                 ))}
               </div>
@@ -404,14 +406,28 @@ export function App() {
                   hover:bg-[var(--panel-2)] transition flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full"
                   style={{ background: cloud.signedIn ? 'var(--good)' : 'var(--muted-2)' }} />
-                {cloud.signedIn ? `Библиотека${cloud.sessions.length ? ` (${cloud.sessions.length})` : ''}` : 'Войти'}
+                {cloud.signedIn
+                  ? <>
+                      <span className="sm:hidden">📁{cloud.sessions.length ? ` ${cloud.sessions.length}` : ''}</span>
+                      <span className="hidden sm:inline">
+                        Библиотека{cloud.sessions.length ? ` (${cloud.sessions.length})` : ''}
+                      </span>
+                    </>
+                  : 'Войти'}
               </button>
             )}
             {!gated && (
               <button onClick={() => input.current?.click()}
                 title="Разовый разбор файла с диска — в библиотеку он не попадёт"
                 className="px-3 py-1.5 rounded-lg border border-[var(--line)] text-xs hover:bg-[var(--panel-2)] transition">
-                {a ? `Добавить файл${sources.length ? ` (${sources.length}/${MAX})` : ''}` : 'Выбрать файлы'}
+                {a
+                  ? <>
+                      <span className="sm:hidden">+ файл{sources.length ? ` ${sources.length}/${MAX}` : ''}</span>
+                      <span className="hidden sm:inline">
+                        Добавить файл{sources.length ? ` (${sources.length}/${MAX})` : ''}
+                      </span>
+                    </>
+                  : 'Выбрать файлы'}
               </button>
             )}
             <input ref={input} type="file" accept=".csv" multiple hidden
@@ -423,10 +439,10 @@ export function App() {
         </div>
 
         {a && (
-          <div className="max-w-[1500px] mx-auto px-5 flex gap-1 -mb-px">
+          <div className="max-w-[1500px] mx-auto px-3 sm:px-5 flex gap-1 -mb-px scroll-x">
             {TABS.map(([id, label]) => (
               <button key={id} onClick={() => setTab(id)}
-                className={`px-3.5 py-2 text-[13px] border-b-2 transition
+                className={`px-3 sm:px-3.5 py-2 text-[13px] shrink-0 whitespace-nowrap border-b-2 transition
                   ${tab === id ? 'border-[var(--text)] text-[var(--text)]' : 'border-transparent text-[var(--muted)] hover:text-[var(--text)]'}`}>
                 {label}
               </button>
@@ -435,7 +451,7 @@ export function App() {
         )}
       </header>
 
-      <main className="flex-1 max-w-[1500px] w-full mx-auto px-5 py-5">
+      <main className="flex-1 max-w-[1500px] w-full mx-auto px-3 sm:px-5 py-4 sm:py-5">
         {err && (
           <div className="panel p-4 mb-4 border-[#5a2b2b] bg-[#1a1113] text-[#ffb3b3] text-[13px]">{err}</div>
         )}
