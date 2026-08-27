@@ -9,6 +9,7 @@ export interface LapTrace {
   v: Float64Array;      // скорость, км/ч
   lat: Float64Array;    // боковое смещение от осевой, м
   hop: Float64Array;    // тряска: высокочастотная вертикаль, g (NaN — канала нет)
+  kap: Float64Array;    // кривизна траектории по гироскопу, 1/м (NaN — канала нет)
   pathLength: number;   // реально пройденная дистанция, м
 }
 
@@ -22,11 +23,13 @@ export function buildLapTrace(
   // заездах — без него тряска просто не считается.
   let vert: Float64Array | null = null;
   try { vert = ch(s, 'VerticalAcc'); } catch { vert = null; }
+  let yaw: Float64Array | null = null;
+  try { yaw = ch(s, 'YawRate'); } catch { yaw = null; }
 
   const n = lap.i1 - lap.i0;
   const xs = new Float64Array(n), ys = new Float64Array(n);
   const vv = new Float64Array(n), tt = new Float64Array(n);
-  const hh = new Float64Array(n);
+  const hh = new Float64Array(n), kk = new Float64Array(n);
   let pathLength = 0;
   for (let k = 0; k < n; k++) {
     const i = lap.i0 + k;
@@ -38,7 +41,25 @@ export function buildLapTrace(
     hh[k] = vert && i > 0 && i < vert.length - 1
       ? Math.abs(vert[i] - (vert[i - 1] + vert[i + 1]) / 2)
       : NaN;
+    // Кривизна вместо угла руля: yaw[рад/с] / V[м/с] = 1/R. Сам угол руля из
+    // телеметрии не восстановить (снос шин не наблюдается и на пределе он больше
+    // геометрии), а вот радиус, который карт сейчас пишет, меряется точно и от
+    // скорости не зависит. Знаменатель ограничен снизу: на медленном ходу
+    // деление на скорость раздувает шум гироскопа до бессмысленных величин.
+    kk[k] = yaw ? (yaw[i] * Math.PI / 180) / Math.max(vv[k] / 3.6, 3) : NaN;
   }
+  // Гироскоп сглаживаем окном ~0.25 с: без него в кривизну попадает вибрация рамы,
+  // и «руль прямо» перестаёт определяться устойчиво.
+  const ks = new Float64Array(n);
+  const kw = Math.max(1, Math.round(0.125 * (Number(s.meta['Sample Rate']) || 20)));
+  for (let k = 0; k < n; k++) {
+    let sum = 0, cnt = 0;
+    for (let j = Math.max(0, k - kw); j <= Math.min(n - 1, k + kw); j++) {
+      if (isFinite(kk[j])) { sum += kk[j]; cnt++; }
+    }
+    ks[k] = cnt ? sum / cnt : NaN;
+  }
+
   // огибающая по ~0.3 с: интересен уровень тряски, а не отдельный удар
   const env = new Float64Array(n);
   const w = Math.max(1, Math.round(0.15 * (Number(s.meta['Sample Rate']) || 20)));
@@ -57,6 +78,7 @@ export function buildLapTrace(
     v: resampleByS(pr.s, vv, grid),
     lat: resampleByS(pr.s, pr.lat, grid),
     hop: resampleByS(pr.s, env, grid),
+    kap: resampleByS(pr.s, ks, grid),
     pathLength,
   };
 }
@@ -199,7 +221,17 @@ export interface ZoneStats {
   sAccel: number;     // где после низшей точки скорость пошла вверх, м от начала круга
   hop: number;        // средний уровень тряски в зоне, g (NaN — канала нет)
   latApex: number;    // боковое положение в апексе, м
+  /** где карт распрямился после апекса, м от апекса (NaN — гироскопа нет или не распрямился) */
+  sUnwind: number;
 }
+
+/** Радиус, начиная с которого считаем, что руль уже прямой. 70 м на картодроме —
+ *  это уже прямая: самый пологий поворот здесь втрое круче. */
+export const STRAIGHT_R = 70;
+
+/** Докуда после апекса ещё имеет смысл искать распрямление. Дальше начинается
+ *  следующий элемент трассы, и «не распрямился» перестаёт быть про этот поворот. */
+const UNWIND_WIN = 160;
 
 /** Локальная скорость потери времени: производная накопленной дельты по дистанции.
  *  Показывает, ГДЕ время утекает, а не сколько накопилось к этой точке. */
@@ -265,6 +297,17 @@ export function zoneStats(tr: LapTrace, zones: Zone[], grid: Float64Array): Zone
     let hopSum = 0, hopCnt = 0;
     walk(a, b, i => { if (isFinite(tr.hop[i])) { hopSum += tr.hop[i]; hopCnt++; } });
 
+    // Точка распрямления: первый метр после апекса, где карт перестал вращаться.
+    // Ищем от апекса вперёд, не ограничиваясь зоной — распрямление часто
+    // происходит уже за её границей, и обрезать его значило бы потерять сам эффект.
+    const step = grid[1] - grid[0];
+    let sUnwind = NaN;
+    if (isFinite(tr.kap[ap])) {
+      for (let d = 0; d * step < UNWIND_WIN; d++) {
+        if (Math.abs(tr.kap[(ap + d) % N]) < 1 / STRAIGHT_R) { sUnwind = d * step; break; }
+      }
+    }
+
     return {
       zone: z, tZone, vMin: vMin[zi],
       vEntry: tr.v[ca], vExit: tr.v[cb],
@@ -273,6 +316,7 @@ export function zoneStats(tr: LapTrace, zones: Zone[], grid: Float64Array): Zone
       sAccel: iAcc >= 0 ? grid[iAcc] : NaN,
       hop: hopCnt ? hopSum / hopCnt : NaN,
       latApex: tr.lat[ap],
+      sUnwind,
     };
   });
 }

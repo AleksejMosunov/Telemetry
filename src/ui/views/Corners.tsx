@@ -31,13 +31,15 @@ const METRICS = [
    'Где после низшей точки скорость снова пошла вверх — то есть где карт поехал. Между точкой замедления и точкой разгона он не ускоряется, и чем короче этот участок, тем лучше. Прочерк значит, что разгон в пределах зоны так и не начался.'],
   ['coast', 'не ускоряется', 'м',
    'Длина участка от конца разгона до его начала в следующий раз. Педалей в логе нет, поэтому это честно называется «не ускоряется», а не «накат» или «торможение»: скорость может не расти и от тормоза, и от сброса газа, и просто оттого, что её съедает дуга. Чем короче участок, тем раньше карт снова едет. Прочерк — точки замедления в зоне нет.'],
+  ['unwind', 'распрямил руль', 'м',
+   'Через сколько метров после апекса карт перестаёт вращаться — то есть с какого места он едет прямо и можно открывать газ. Считается по гироскопу: не угол руля (его из телеметрии не восстановить — снос шин не наблюдается), а радиус, который карт реально пишет. Меньше — раньше распрямился. Прочерк — в логе нет гироскопа.'],
   ['hop', 'скачки', 'g',
    'Насколько трясёт карт в этой зоне: быстрая часть вертикального ускорения. Ловит места, где карт прыгает, бьёт по поребрику или ловит кочку, но не различает, что именно из этого происходит — для этого нужна запись быстрее 20 Гц. Прочерк — в логе нет канала вертикального ускорения.'],
 ] as const;
 type Metric = typeof METRICS[number][0];
 
 export function Corners({ ctx }: { ctx: ViewCtx }) {
-  const { a, ref, name, color, Z, V } = ctx;
+  const { a, ref, name, color, Z, V, ZU } = ctx;
   const [metric, setMetric] = useState<Metric>('dt');
   const [sel, setSel] = useState<number | null>(null);
   const [pinned, setPinned] = useState<number | null>(null);
@@ -61,11 +63,15 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
           const v = zs.sAccel - zs.sBrake, r = rs.sAccel - rs.sBrake;
           return { v, raw: v, d: v - r };
         }
+        case 'unwind': {
+          const v = ZU(d)[i], r = ZU(ref)[i];
+          return { v, raw: v, d: v - r };
+        }
         case 'hop': return { v: zs.hop, raw: zs.hop, d: zs.hop - rs.hop };
       }
     });
     return { z, i, cells };
-  }), [a, ref, metric, Z, V]);
+  }), [a, ref, metric, Z, V, ZU]);
 
   const totals = a.drivers.map(d => {
     const t = a.zones.reduce((s, _, i) => s + Z(d)[i].tZone, 0);
@@ -76,10 +82,13 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
 
   const unit = METRICS.find(([m]) => m === metric)![2];
   const isMark = metric === 'brake' || metric === 'smin' || metric === 'accel';
-  const digits = metric === 'dt' || metric === 'hop' ? 3 : isMark || metric === 'coast' ? 0 : 1;
+  const digits = metric === 'dt' || metric === 'hop' ? 3
+    : isMark || metric === 'coast' || metric === 'unwind' ? 0 : 1;
   // Отметки на круге сравниваются как «раньше — зелёное»: для низшей точки и
   // разгона это прямо хорошо, для торможения так было заведено с самого начала.
-  const lowerBetter = metric === 'dt' || isMark || metric === 'coast' || metric === 'hop';
+  // Распрямился раньше — раньше открыл газ, поэтому меньше тоже лучше.
+  const lowerBetter = metric === 'dt' || isMark || metric === 'coast' || metric === 'hop'
+    || metric === 'unwind';
 
   /** Пилот, чьи потери показывает карта: самый медленный из неопорных. */
   const lossOf = useMemo(() => {

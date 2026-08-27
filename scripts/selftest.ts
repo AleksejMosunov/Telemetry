@@ -192,6 +192,27 @@ for (const d of a.drivers) {
     `зоны ${byZone.toFixed(3)} ≤ сектора ${bySector.toFixed(3)} ≤ круг ${bestLap.toFixed(3)}`]);
 }
 
+// Точка распрямления должна находиться в каждом повороте и лежать после апекса,
+// но до следующего элемента трассы — иначе метрика меряет уже не этот поворот.
+for (const d of a.drivers) {
+  const u = Array.from(d.unwindByZone);
+  const found = u.filter(v => isFinite(v));
+  checks.push([`точка распрямления найдена во всех поворотах (${d.name})`,
+    found.length === a.zones.length,
+    `${found.length} из ${a.zones.length}`]);
+  checks.push([`точка распрямления в разумных пределах (${d.name})`,
+    found.every(v => v >= 0 && v <= 160),
+    `${Math.min(...found).toFixed(0)}–${Math.max(...found).toFixed(0)} м от апекса`]);
+}
+// Разница между пилотами в T6 — та самая находка, ради которой метрика и делалась.
+{
+  const t6 = a.zones.findIndex(z => z.corner.name === 'T6');
+  const vals = a.drivers.map(d => d.unwindByZone[t6]);
+  checks.push(['T6 разделяет пилотов по точке распрямления',
+    t6 >= 0 && Math.abs(vals[0] - vals[1]) >= 20,
+    vals.map(v => `${v.toFixed(0)} м`).join(' против ')]);
+}
+
 let bad = 0;
 for (const [name, ok, note] of checks) {
   if (!ok) bad++;

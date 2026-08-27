@@ -106,6 +106,8 @@ export interface ViewCtx {
   Z: (d: DriverResult) => DriverResult['zoneMed'];
   /** длина реально пройденной траектории по зонам, м */
   ZP: (d: DriverResult) => Float64Array;
+  /** где карт распрямляется после апекса, м от апекса; NaN — гироскопа нет */
+  ZU: (d: DriverResult) => Float64Array;
   /** разброс траектории по кругам, м; в режиме лучшего круга его нет */
   LATSD: (d: DriverResult) => Float64Array | null;
   /** снятые вручную круги заезда */
@@ -363,6 +365,9 @@ export function App() {
       LAT: (d) => (lapMode === 'best' ? d.bestLat : d.medLat),
       Z: (d) => (lapMode === 'best' ? d.zoneBest : d.zoneMed),
       ZP: (d) => (lapMode === 'best' ? d.bestPathByZone : d.medPathByZone),
+      ZU: (d) => (lapMode === 'best'
+        ? Float64Array.from(d.zoneBest, z => z.sUnwind)
+        : d.unwindByZone),
       LATSD: (d) => (lapMode === 'best' ? null : d.medLatSd),
       exclOf: (d) => excl[d.fingerprint] ?? [],
       setExcl,

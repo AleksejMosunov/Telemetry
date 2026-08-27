@@ -5,6 +5,7 @@ import type { DriverResult } from '../../core/pipeline';
 import { zoneIndices, lineXY, normalAt } from '../TrackMap';
 import { Chart } from '../Chart';
 import { delta, num, deltaColor } from '../format';
+import { STRAIGHT_R } from '../../core/analysis';
 
 const fmtSpeedV = (v: number) => `${num(v)} км/ч`;
 
@@ -14,7 +15,7 @@ function CornerMap({ ctx, zoneIndex, height = 260, hoverK }: {
   /** место под курсором графика скорости: индекс точки внутри зоны */
   hoverK?: number | null;
 }) {
-  const { a, color, LAT, LATSD, Z, V } = ctx;
+  const { a, color, LAT, LATSD, Z, V, ZU } = ctx;
   const cv = useRef<HTMLCanvasElement>(null);
   const box = useRef<HTMLDivElement>(null);
 
@@ -97,6 +98,20 @@ function CornerMap({ ctx, zoneIndex, height = 260, hoverK }: {
         ctx2.strokeStyle = color(d); ctx2.lineWidth = 2;
         ctx2.beginPath(); ctx2.arc(px(xy[0][km]), py(xy[1][km]), 5.5, 0, Math.PI * 2); ctx2.stroke();
       }
+
+      // Точка распрямления: отсюда карт едет прямо. Квадрат, а не круг —
+      // круглые метки уже заняты скоростью, и путать их нельзя.
+      const u = ZU(d)[zoneIndex];
+      if (isFinite(u)) {
+        const ku = idxs.indexOf(Math.round(c.sApex + u) % n);
+        if (ku >= 0) {
+          const X = px(xy[0][ku]), Y = py(xy[1][ku]), r = 4;
+          ctx2.fillStyle = color(d);
+          ctx2.fillRect(X - r, Y - r, r * 2, r * 2);
+          ctx2.strokeStyle = '#0a0c10'; ctx2.lineWidth = 1.5;
+          ctx2.strokeRect(X - r, Y - r, r * 2, r * 2);
+        }
+      }
     }
 
     // апекс
@@ -134,7 +149,7 @@ function CornerMap({ ctx, zoneIndex, height = 260, hoverK }: {
         ctx2.strokeStyle = '#0a0c10'; ctx2.lineWidth = 2; ctx2.stroke();
       }
     }
-  }, [a, zoneIndex, height, color, LAT, LATSD, Z, V, hoverK]);
+  }, [a, zoneIndex, height, color, LAT, LATSD, Z, V, ZU, hoverK]);
 
   return <div ref={box} style={{ width: '100%' }}><canvas ref={cv} style={{ display: 'block' }} /></div>;
 }
@@ -155,13 +170,19 @@ function diagnose(ctx: ViewCtx, d: DriverResult, zi: number): string[] {
   if (dBrake > a.track.length / 2) dBrake -= a.track.length;
   if (dBrake < -a.track.length / 2) dBrake += a.track.length;
   const dPath = ctx.ZP(d)[zi] - ctx.ZP(ref)[zi];
+  const uD = ctx.ZU(d)[zi], uR = ctx.ZU(ref)[zi];
+  const dUnwind = uD - uR;
 
   if (isFinite(dBrake) && Math.abs(dBrake) >= 3) {
     out.push(`Замедляться начинает на ${Math.abs(dBrake).toFixed(0)} м ${dBrake < 0 ? 'раньше' : 'позже'}.`);
   }
   if (dApex > 1 && dExit < -0.5) {
-    out.push(`В низшей точке быстрее на ${dApex.toFixed(1)} км/ч, но на выходе медленнее на ${Math.abs(dExit).toFixed(1)} км/ч. ` +
-      `Перебор на входе: карт не встаёт на дугу, руль остаётся повёрнутым, газ открывается позже.`);
+    // Если гироскоп есть, «руль остаётся повёрнутым» перестаёт быть догадкой:
+    // видно, на сколько метров дольше карт вращается после апекса.
+    const tail = isFinite(dUnwind) && dUnwind >= 5
+      ? ` Карт распрямляется на ${dUnwind.toFixed(0)} м позже апекса (${uD.toFixed(0)} м против ${uR.toFixed(0)} м) — дуга тянется дольше, газ открывается позже.`
+      : ` Перебор на входе: карт не встаёт на дугу, руль остаётся повёрнутым, газ открывается позже.`;
+    out.push(`В низшей точке быстрее на ${dApex.toFixed(1)} км/ч, но на выходе медленнее на ${Math.abs(dExit).toFixed(1)} км/ч.${tail}`);
   } else if (dApex < -1 && dExit < -0.5) {
     out.push(`Медленнее и в низшей точке (−${Math.abs(dApex).toFixed(1)} км/ч), и на выходе (−${Math.abs(dExit).toFixed(1)} км/ч). ` +
       `Теряет по всей дуге, а не в одной точке.`);
@@ -173,6 +194,10 @@ function diagnose(ctx: ViewCtx, d: DriverResult, zi: number): string[] {
   }
   if (Math.abs(dPath) > 0.4) {
     out.push(`Проезжает на ${Math.abs(dPath).toFixed(1)} м ${dPath > 0 ? 'длиннее' : 'короче'} внутри зоны.`);
+  }
+  if (isFinite(dUnwind) && Math.abs(dUnwind) >= 5 && !(dApex > 1 && dExit < -0.5)) {
+    out.push(`Распрямляет карт на ${Math.abs(dUnwind).toFixed(0)} м ${dUnwind > 0 ? 'позже' : 'раньше'} ` +
+      `(${uD.toFixed(0)} м после апекса против ${uR.toFixed(0)} м).`);
   }
   if (!out.length) out.push(`Потеря ${delta(dt)} с распределена по зоне без явной одной причины.`);
   return out;
@@ -227,6 +252,10 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
       hint: 'Быстрая часть вертикального ускорения — прыжки, поребрики, кочки. Что именно из этого, по записи на 20 Гц не различить.' },
     { label: 'длина траектории', get: (d: DriverResult) => ctx.ZP(d)[zoneIndex], unit: 'м', d: 1, up: false,
       hint: 'Сколько метров реально проехал внутри этой зоны по своей траектории.' },
+    { label: 'распрямил после апекса', get: (d: DriverResult) => ctx.ZU(d)[zoneIndex], unit: 'м', d: 0, up: false,
+      hint: `Через сколько метров после апекса карт перестаёт вращаться (радиус становится больше ${STRAIGHT_R} м). `
+        + 'Считается по гироскопу — это не угол руля, а радиус, который карт реально пишет. '
+        + 'Чем раньше, тем раньше можно открыть газ. Прочерк — в логе нет гироскопа.' },
     { label: 'время в зоне', get: (d: DriverResult) => Z(d)[zoneIndex].tZone, unit: 'с', d: 3, up: false,
       hint: 'Время от начала зоны до её конца. Сумма по всем зонам равна времени круга.' },
   ];
@@ -259,6 +288,7 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
       <div className="text-[10px] text-[var(--muted-2)] -mt-2">
         Линия — усреднённая траектория, заливка — обычный разброс линии по кругам.
         Залитая точка — начало замедления, кольцо — реальная низшая точка скорости.
+        Квадрат — где карт распрямился: дальше он едет по радиусу больше {STRAIGHT_R} м.
         Пунктирный кружок — геометрический апекс: они часто не совпадают.
         Крупные точки и поперечная засечка — место, на которое наведён график скорости.
       </div>

@@ -41,12 +41,18 @@ export interface DriverResult {
   /** траектории чистых кругов на общей сетке дистанции */
   traces: {
     lapIndex: number; v: Float64Array; lat: Float64Array; t: Float64Array; hop: Float64Array;
+    kap: Float64Array;
   }[];
   medV: Float64Array; medT: Float64Array; medLat: Float64Array;
   /** разброс траектории по кругам, м (СКО на каждом метре) */
   medLatSd: Float64Array;
   /** длина усреднённой траектории, м — считается по реальным кругам, а не по сглаженной линии */
   medPathByZone: Float64Array;
+  /** где карт распрямляется после апекса, м от апекса — медиана по реальным кругам.
+   *  По усреднённой траектории считать нельзя: распределение бывает двугорбым
+   *  (пилот либо распрямляется сразу, либо тянет дугу до выхода), и медиана
+   *  профиля тогда описывает несуществующий средний проезд. */
+  unwindByZone: Float64Array;
   bestPathByZone: Float64Array;
   bestV: Float64Array; bestT: Float64Array; bestLat: Float64Array;
   zoneMed: ZoneStats[]; zoneBest: ZoneStats[];
@@ -261,7 +267,7 @@ export function analyzeSessions(
         pathLength: tr.pathLength, corrections: corrections(p.s, l),
       });
       if (auto && !isExcluded) {
-        traces.push({ lapIndex: l.index, v: tr.v, lat: tr.lat, t: tr.t, hop: tr.hop });
+        traces.push({ lapIndex: l.index, v: tr.v, lat: tr.lat, t: tr.t, hop: tr.hop, kap: tr.kap });
         zoneByLap.push(Float64Array.from(zoneStats(tr, zones, grid).map(z => z.tZone)));
       } else if (isExcluded) {
         excludedRows.push({
@@ -309,6 +315,7 @@ export function analyzeSessions(
     const medV = medianChannel(traces.map(t => t.v), N);
     const medLat = medianChannel(traces.map(t => t.lat), N);
     const medHop = medianChannel(traces.map(t => t.hop), N);
+    const medKap = medianChannel(traces.map(t => t.kap), N);
 
     const bestLapIndex = cleanInfos.reduce((a, b) => (a.time <= b.time ? a : b)).index;
     const bi = traces.findIndex(t => t.lapIndex === bestLapIndex);
@@ -321,13 +328,22 @@ export function analyzeSessions(
     // Усреднённый круг — синтетический: медиана по каждому метру.
     // Раньше зоны считались по одному «представительному» реальному кругу,
     // из-за чего таблица поворотов расходилась с графиками.
-    const medTrace = { lap: bestLap, t: medT, v: medV, lat: medLat, hop: medHop, pathLength: 0 };
+    const medTrace = { lap: bestLap, t: medT, v: medV, lat: medLat, hop: medHop, kap: medKap, pathLength: 0 };
 
     // Длину траектории в зоне усредняем по РЕАЛЬНЫМ кругам: усреднение самой линии
     // сглаживает рыскание, а именно оно и даёт лишние метры.
     const zonePathPerLap = traces.map(tr => zonePathLengths(cl, tr.lat, zones, grid));
     const medPathByZone = new Float64Array(zones.length);
     for (let z = 0; z < zones.length; z++) medPathByZone[z] = med(zonePathPerLap.map(r => r[z]));
+
+    const unwindPerLap = traces.map(tr =>
+      zoneStats({ lap: bestLap, t: tr.t, v: tr.v, lat: tr.lat, hop: tr.hop, kap: tr.kap, pathLength: 0 },
+        zones, grid).map(z => z.sUnwind));
+    const unwindByZone = new Float64Array(zones.length);
+    for (let z = 0; z < zones.length; z++) {
+      const col = unwindPerLap.map(r => r[z]).filter(v => isFinite(v));
+      unwindByZone[z] = col.length >= 3 ? med(col) : NaN;
+    }
     const bestPathByZone = zonePathLengths(cl, bestFull.lat, zones, grid);
 
     return {
@@ -358,7 +374,7 @@ export function analyzeSessions(
       traces,
       medV, medT, medLat,
       bestV: bestTrace.v, bestT: bestTrace.t, bestLat: bestTrace.lat,
-      medLatSd, medPathByZone, bestPathByZone,
+      medLatSd, medPathByZone, bestPathByZone, unwindByZone,
       zoneMed: zoneStats(medTrace, zones, grid),
       zoneBest: zoneStats(bestFull, zones, grid),
       zoneByLap, zoneSigma, excludedRows,

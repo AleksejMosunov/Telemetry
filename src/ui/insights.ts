@@ -1,4 +1,5 @@
 import { time24, type Analysis, type DriverResult } from '../core/pipeline';
+import { delta } from './format';
 
 export interface Insight {
   kind: 'key' | 'pattern' | 'note' | 'caveat';
@@ -68,6 +69,36 @@ export function buildInsights(a: Analysis, refId: string, name: (d: DriverResult
         body: `Потеря не в одном месте, а системная.${hint}`,
       });
     }
+  }
+
+  // --- где карт распрямляется: замер вместо догадки про «руль остаётся повёрнутым» ---
+  for (const d of a.drivers) {
+    if (d.id === ref.id) continue;
+    const late = a.zones.map((z, i) => ({
+      z, i,
+      du: d.unwindByZone[i] - ref.unwindByZone[i],
+      dt: d.zoneMed[i].tZone - ref.zoneMed[i].tZone,
+    })).filter(r => isFinite(r.du) && Math.abs(r.du) >= 8);
+    if (!late.length) continue;
+    late.sort((p, q) => Math.abs(q.du) - Math.abs(p.du));
+    const worst = late.filter(r => r.du > 0);
+    const list = late.slice(0, 3).map(r =>
+      `${r.z.corner.name} ${r.du > 0 ? '+' : '−'}${Math.abs(r.du).toFixed(0)} м ` +
+      `(${d.unwindByZone[r.i].toFixed(0)} против ${ref.unwindByZone[r.i].toFixed(0)})`).join(', ');
+    // Сразу говорим, стоит ли это времени: чаще всего лишняя скорость на входе
+    // ровно окупает потерю на выходе, и тогда это развилка стиля, а не ошибка.
+    const dtSum = late.reduce((acc, r) => acc + r.dt, 0);
+    const priced = Math.abs(dtSum) < 0.03
+      ? `По времени эти зоны дают ${delta(dtSum)} с суммарно — лишняя скорость на входе окупает потерю на выходе, ` +
+        `так что это развилка стиля, а не готовая ошибка.`
+      : `Суммарно эти зоны ${dtSum > 0 ? 'стоят' : 'дают'} ${delta(dtSum)} с.`;
+    out.push({
+      kind: worst.length ? 'pattern' : 'note',
+      title: `${name(d)}: дуга тянется дольше в ${late.length} ${late.length === 1 ? 'повороте' : 'поворотах'}`,
+      body: `Метры от апекса до момента, когда карт перестаёт вращаться: ${list}. ` +
+        `Меряется гироскопом как радиус траектории, а не как угол руля — угол из телеметрии не восстановить. ` +
+        `${priced}`,
+    });
   }
 
   // --- где именно теряется время ---
