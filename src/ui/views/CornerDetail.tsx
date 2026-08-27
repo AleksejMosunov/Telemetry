@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type uPlot from 'uplot';
 import type { ViewCtx } from '../App';
 import type { DriverResult } from '../../core/pipeline';
-import { zoneIndices, lineXY } from '../TrackMap';
+import { zoneIndices, lineXY, normalAt } from '../TrackMap';
 import { Chart } from '../Chart';
 import { delta, num, deltaColor } from '../format';
 
 const fmtSpeedV = (v: number) => `${num(v)} км/ч`;
 
 /** Крупный план одного поворота: реальные траектории пилотов, апекс, точки замедления. */
-function CornerMap({ ctx, zoneIndex, height = 260 }: { ctx: ViewCtx; zoneIndex: number; height?: number }) {
+function CornerMap({ ctx, zoneIndex, height = 260, hoverK }: {
+  ctx: ViewCtx; zoneIndex: number; height?: number;
+  /** место под курсором графика скорости: индекс точки внутри зоны */
+  hoverK?: number | null;
+}) {
   const { a, color, LAT, LATSD, Z, V } = ctx;
   const cv = useRef<HTMLCanvasElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -107,7 +111,30 @@ function CornerMap({ ctx, zoneIndex, height = 260 }: { ctx: ViewCtx; zoneIndex: 
     ctx2.font = '10px ui-sans-serif, system-ui';
     ctx2.textAlign = 'center';
     ctx2.fillText('апекс', px(a.track.x[ap]), py(a.track.y[ap]) - 13);
-  }, [a, zoneIndex, height, color, LAT, LATSD, Z, V]);
+
+    // место под курсором графика: поперечная засечка по осевой и точка
+    // на траектории каждого пилота — видно, где именно снята эта скорость
+    if (hoverK != null && idxs.length) {
+      const k = Math.max(0, Math.min(idxs.length - 1, Math.round(hoverK)));
+      const i = idxs[k];
+      const [nx, ny] = normalAt(a, i);
+      const half = 5;   // м — чуть шире полотна трассы, оно рисуется на 7 м
+      ctx2.strokeStyle = 'rgba(231,236,245,0.35)';
+      ctx2.lineWidth = 1.5;
+      ctx2.beginPath();
+      ctx2.moveTo(px(a.track.x[i] + nx * half), py(a.track.y[i] + ny * half));
+      ctx2.lineTo(px(a.track.x[i] - nx * half), py(a.track.y[i] - ny * half));
+      ctx2.stroke();
+
+      for (const { d, xy } of lines) {
+        ctx2.fillStyle = color(d);
+        ctx2.beginPath();
+        ctx2.arc(px(xy[0][k]), py(xy[1][k]), 5, 0, Math.PI * 2);
+        ctx2.fill();
+        ctx2.strokeStyle = '#0a0c10'; ctx2.lineWidth = 2; ctx2.stroke();
+      }
+    }
+  }, [a, zoneIndex, height, color, LAT, LATSD, Z, V, hoverK]);
 
   return <div ref={box} style={{ width: '100%' }}><canvas ref={cv} style={{ display: 'block' }} /></div>;
 }
@@ -153,6 +180,8 @@ function diagnose(ctx: ViewCtx, d: DriverResult, zi: number): string[] {
 
 export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: number }) {
   const { a, ref, name, color, V, Z } = ctx;
+  /** точка под курсором графика скорости — её же показываем на карте зоны */
+  const [hoverK, setHoverK] = useState<number | null>(null);
   const z = a.zones[zoneIndex];
   const c = z.corner;
   const N = a.grid.length;
@@ -217,16 +246,22 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
         })}
       </div>
 
-      <CornerMap ctx={ctx} zoneIndex={zoneIndex} />
+      <CornerMap ctx={ctx} zoneIndex={zoneIndex} hoverK={hoverK} />
       <div className="text-[10px] text-[var(--muted-2)] -mt-2">
         Линия — усреднённая траектория, заливка — обычный разброс линии по кругам.
         Залитая точка — начало замедления, кольцо — реальная низшая точка скорости.
         Пунктирный кружок — геометрический апекс: они часто не совпадают.
+        Крупные точки и поперечная засечка — место, на которое наведён график скорости.
       </div>
 
       <div>
-        <div className="text-[11px] text-[var(--muted)] mb-1">Скорость по зоне, км/ч</div>
-        <Chart data={chart.data} series={chart.series} height={140} bands={bands} fmt={fmtSpeedV} />
+        <div className="text-[11px] text-[var(--muted)] mb-1">
+          Скорость по зоне, км/ч
+          <span className="text-[var(--muted-2)]"> · ведите по графику — место отметится на карте</span>
+        </div>
+        <Chart data={chart.data} series={chart.series} height={140} bands={bands} fmt={fmtSpeedV}
+          xUnit="м от начала зоны"
+          onCursor={x => setHoverK(x == null ? null : Math.round(x))} />
       </div>
 
       <div className="scroll-x -mx-1 px-1">
