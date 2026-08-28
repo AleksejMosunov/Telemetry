@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { ViewCtx } from '../App';
 import { TrackMap, MapLegend } from '../TrackMap';
 import { deltaRate } from '../../core/analysis';
@@ -55,6 +55,11 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
   const [sel, setSel] = useState<number | null>(null);
   const [pinned, setPinned] = useState<number | null>(null);
   const shown = pinned ?? sel;
+  const group = GROUPS.find(g => (g.items as Metric[]).includes(metric)) ?? GROUPS[0];
+  // Возврат в группу должен открывать ту метрику, на которой её оставили,
+  // иначе переключение между группами каждый раз сбрасывает выбор на первую.
+  const lastInGroup = useRef<Record<string, Metric>>({});
+  lastInGroup.current[group.name] = metric;
 
   const rows = useMemo(() => a.zones.map((z, i) => {
     const cells = a.drivers.map(d => {
@@ -144,17 +149,32 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
           </div>
           <div className="scroll-x max-w-full -mx-1 px-1">
           <div className="flex w-max rounded-lg border border-[var(--line)] overflow-hidden text-[11px]">
-            {METRICS.map(([m, label]) => (
-              <button key={m} onClick={() => setMetric(m)}
-                className={`px-2.5 py-1 transition whitespace-nowrap ${metric === m ? 'bg-[var(--panel-2)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}>
-                {label}
+            {GROUPS.map(g => (
+              <button key={g.name} onClick={() => setMetric(lastInGroup.current[g.name] ?? g.items[0])}
+                className={`px-2.5 py-1 transition whitespace-nowrap ${g === group ? 'bg-[var(--panel-2)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}>
+                {g.name}
               </button>
             ))}
           </div>
           </div>
         </div>
 
-        <div className="px-4 pb-3 -mt-1 text-[11px] text-[var(--muted)] leading-relaxed max-w-[720px]">
+        {group.items.length > 1 && (
+          <div className="px-4 -mt-1 pb-2 scroll-x">
+            <div className="flex w-max gap-1 text-[11px]">
+              {group.items.map(m => (
+                <button key={m} onClick={() => setMetric(m)}
+                  className={`px-2 py-0.5 rounded transition whitespace-nowrap ${metric === m
+                    ? 'bg-[var(--panel-2)] text-[var(--text)]'
+                    : 'text-[var(--muted-2)] hover:text-[var(--text)]'}`}>
+                  {METRICS.find(([k]) => k === m)![1]}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="px-4 pb-3 text-[11px] text-[var(--muted)] leading-relaxed max-w-[720px]">
           {METRICS.find(([m]) => m === metric)![3]}
         </div>
 
