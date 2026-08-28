@@ -343,8 +343,11 @@ function Manage({ cloud }: { cloud: CloudState }) {
       </Section>
 
       {ask && (
-        <div className="rounded-lg p-3 text-[12px] leading-relaxed sticky bottom-0"
-          style={{ background: 'rgba(255,107,107,0.12)' }}>
+        // Блок липкий и висит поверх списка, поэтому фон обязан быть непрозрачным:
+        // с полупрозрачной заливкой сквозь него просвечивали строки трасс.
+        <div className="rounded-lg p-3 text-[12px] leading-relaxed sticky bottom-0 z-10
+            border border-[#5a2b2b] shadow-[0_-6px_18px_rgba(0,0,0,0.45)]"
+          style={{ background: 'linear-gradient(rgba(255,107,107,0.12), rgba(255,107,107,0.12)), var(--panel)' }}>
           {ask.kind === 'driver' ? (
             <>Удалить пилота «{ask.name}»?{' '}
               {ask.n > 0

@@ -21,6 +21,12 @@ interface Pending {
   hintIds: string[];
   newTrackName: string;
   newConfigName: string;
+  /** Ключ файла из этой же пачки, который создаёт ту же самую конфигурацию.
+   *  Файлы одной пачки не видят друг друга в cloud.configs — он обновляется
+   *  только после загрузки, — поэтому одна трасса, залитая двумя логами сразу,
+   *  раньше заводила две конфигурации. Такие файлы связываются здесь и делят
+   *  одну конфигурацию, созданную первым из них. */
+  sameConfigAs: string | null;
   state: 'ready' | 'saving' | 'done' | 'error';
   error?: string;
 }
@@ -46,9 +52,15 @@ export function Upload({ cloud, files, onClose, onDone }: {
         const dup = cloud.team ? await findDuplicate(cloud.team.id, p.contentHash, p.fingerprint) : null;
         const hit = findConfig(p.signature, cloud.configs);
 
+        // Файл может совпасть не с базой, а с соседом по пачке. Сравнение тем же
+        // findConfig, что и для базы: он выбирает лучшее совпадение, а не первое.
+        const twin = hit ? null : findConfig(p.signature, out
+          .filter(o => o.state === 'ready' && !o.duplicate && !o.configId && !o.sameConfigAs)
+          .map(o => ({ key: o.key, fileName: o.p.fileName, signature: o.p.signature })))?.config ?? null;
+
         // Конфигурацию не узнали — но площадка может быть знакомой.
         let venueId: string | null = null, venueName = '';
-        if (!hit) {
+        if (!hit && !twin) {
           for (const c of cloud.configs) {
             if (matchTracks(p.signature, c.signature).sameVenue) { venueId = c.trackId; venueName = c.trackName; break; }
           }
@@ -66,14 +78,20 @@ export function Upload({ cloud, files, onClose, onDone }: {
           key: `${f.name}|${f.size}|${f.lastModified}`,
           p, duplicate: dup,
           configId: hit?.config.id ?? null,
+          sameConfigAs: twin?.key ?? null,
           venueId, venueName,
           note: hit
             ? `${hit.config.trackName} · ${hit.config.name} — узнал по траектории (расхождение ${hit.match.spread.toFixed(1)} м)`
-            : venueId
-              ? `Площадка «${venueName}» знакома, но обход ${dir} — конфигурация новая`
-              : 'Новая трасса',
+            : twin
+              ? `Та же трасса, что и «${twin.fileName}» — ляжет в одну конфигурацию с ним`
+              : venueId
+                ? `Площадка «${venueName}» знакома, но обход ${dir} — конфигурация новая`
+                : 'Новая трасса',
           driverId: exact?.id ?? '',
           hintIds: hintIds.filter(id => id !== exact?.id),
+          // Название держим и у привязанного файла: спрашивать его в интерфейсе
+          // не нужно, но если ведущий упадёт с ошибкой, конфигурация всё равно
+          // создастся с осмысленным именем, а не с пустым.
           newTrackName: venueId ? venueName : '',
           newConfigName: hit ? '' : suggest,
           state: 'ready',
@@ -81,7 +99,7 @@ export function Upload({ cloud, files, onClose, onDone }: {
       } catch (e) {
         out.push({
           key: f.name, p: null as unknown as PreparedSession, duplicate: null,
-          configId: null, venueId: null, venueName: '', note: '',
+          configId: null, sameConfigAs: null, venueId: null, venueName: '', note: '',
           driverId: '', hintIds: [], newTrackName: '', newConfigName: '',
           state: 'error', error: e instanceof Error ? e.message : String(e),
         });
@@ -115,15 +133,21 @@ export function Upload({ cloud, files, onClose, onDone }: {
   };
 
   const uploadable = (items ?? []).filter(it => it.state === 'ready' && !it.duplicate);
+  // У привязанного файла своей конфигурации нет — её задаёт ведущий, и спрашивать
+  // у пользователя название второй раз незачем.
   const incomplete = uploadable.filter(it =>
-    !it.driverId || (!it.configId && (!it.newConfigName.trim() || (!it.venueId && !it.newTrackName.trim()))));
+    !it.driverId
+    || (!it.configId && !it.sameConfigAs
+        && (!it.newConfigName.trim() || (!it.venueId && !it.newTrackName.trim()))));
 
   const run = async () => {
     if (!cloud.team) return;
+    // Конфигурации, созданные прямо в этом прогоне: ключ ведущего файла -> id.
+    const made = new Map<string, string>();
     for (const it of uploadable) {
       patch(it.key, { state: 'saving' });
       try {
-        let configId = it.configId;
+        let configId = it.configId ?? (it.sameConfigAs ? made.get(it.sameConfigAs) ?? null : null);
         if (!configId) {
           const cfg = await createConfig(cloud.team.id, it.p.signature, {
             trackId: it.venueId ?? undefined,
@@ -131,6 +155,7 @@ export function Upload({ cloud, files, onClose, onDone }: {
             configName: it.newConfigName.trim(),
           });
           configId = cfg.id;
+          made.set(it.key, configId);
           await cloud.refresh();
         }
         await commitSession(cloud.team.id, it.p, { driverId: it.driverId, configId });
@@ -266,7 +291,9 @@ function Row({ it, cloud, patch }: {
             </div>
           )}
 
-          {it.configId ? (
+          {it.configId || it.sameConfigAs ? (
+            /* Привязанный файл конфигурацию не заводит — её создаёт ведущий,
+               поэтому спрашивать название второй раз не нужно. */
             <div className="flex flex-col gap-1">
               <span className="text-[10px] text-[var(--muted-2)]">трасса</span>
               <span className="text-[12px] text-[var(--good)] py-1.5">{it.note}</span>
