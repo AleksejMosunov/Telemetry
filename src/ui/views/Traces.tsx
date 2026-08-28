@@ -9,7 +9,7 @@ const fmtDelta = (v: number) => `${delta(v)} с`;
 const fmtOffset = (v: number) => `${num(v, 2)} м`;
 
 export function Traces({ ctx }: { ctx: ViewCtx }) {
-  const { a, ref, name, color, V, T, LAT, cursorS, setCursorS } = ctx;
+  const { a, cmp, ref, name, color, V, T, LAT, cursorS, setCursorS } = ctx;
   const xs = useMemo(() => Array.from(a.grid), [a]);
 
   const bands = useMemo(
@@ -20,11 +20,11 @@ export function Traces({ ctx }: { ctx: ViewCtx }) {
     [a],
   );
 
-  const mk = (get: (d: typeof a.drivers[0]) => Float64Array, skipRefZero = false) => {
-    const rows = a.drivers.map(d => Array.from(get(d)));
+  const mk = (get: (d: typeof cmp[0]) => Float64Array, skipRefZero = false) => {
+    const rows = cmp.map(d => Array.from(get(d)));
     const series: uPlot.Series[] = [
       { label: 'м' },
-      ...a.drivers.map(d => ({
+      ...cmp.map(d => ({
         label: name(d), stroke: color(d),
         width: d.id === ref.id ? 2.2 : 1.6,
         dash: skipRefZero && d.id === ref.id ? [4, 4] : undefined,
@@ -36,17 +36,17 @@ export function Traces({ ctx }: { ctx: ViewCtx }) {
   const speed = useMemo(() => mk(V), [a, V, name, color, xs]);
   const dt = useMemo(() => {
     const r = T(ref);
-    const rows = a.drivers.map(d => { const t = T(d); return xs.map((_, i) => t[i] - r[i]); });
+    const rows = cmp.map(d => { const t = T(d); return xs.map((_, i) => t[i] - r[i]); });
     const series: uPlot.Series[] = [
       { label: 'м' },
-      ...a.drivers.map(d => ({
+      ...cmp.map(d => ({
         label: name(d), stroke: color(d),
         width: d.id === ref.id ? 1 : 2,
         dash: d.id === ref.id ? [4, 4] : undefined,
       })),
     ];
     return { data: [xs, ...rows] as unknown as uPlot.AlignedData, series };
-  }, [a, T, ref, name, color, xs]);
+  }, [a, cmp, T, ref, name, color, xs]);
   const lat = useMemo(() => mk(LAT), [a, LAT, name, color, xs]);
 
   const idx = cursorS == null ? null : Math.max(0, Math.min(xs.length - 1, Math.round(cursorS)));
@@ -58,7 +58,7 @@ export function Traces({ ctx }: { ctx: ViewCtx }) {
         <span className="text-[var(--muted)] text-[11px]">
           {idx == null ? 'наведите на график' : `${idx} м${cornerAt ? ` · ${cornerAt.name}` : ''}`}
         </span>
-        {idx != null && a.drivers.map(d => (
+        {idx != null && cmp.map(d => (
           <span key={d.id} className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full" style={{ background: color(d) }} />
             <span className="text-[var(--muted)]">{name(d)}</span>

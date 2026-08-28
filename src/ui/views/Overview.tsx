@@ -227,8 +227,9 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
 }
 
 function DriverCard({ d, ctx }: { d: DriverResult; ctx: ViewCtx }) {
-  const { ref, name, color } = ctx;
+  const { ref, name, color, ghosts, toggleGhost, lapMode } = ctx;
   const isRef = d.id === ref.id;
+  const ghostOn = ghosts.includes(d.id);
   const dBest = d.stats.best - ref.stats.best;
   const dPath = d.stats.medianPath - ref.stats.medianPath;
   const clean = d.laps.filter(l => l.clean).length;
@@ -263,6 +264,20 @@ function DriverCard({ d, ctx }: { d: DriverResult; ctx: ViewCtx }) {
         extraColor={d.stats.drift < -0.05 ? 'var(--good)' : d.stats.drift > 0.05 ? 'var(--bad)' : 'var(--muted-2)'} />
       <Row label="пик перегрузки" value={`${num(d.stats.peakG, 2)} g`}
         hint="Наибольшее суммарное ускорение за круг — торможение и поворот вместе. Показывает, насколько пилот готов давить. Одинаковые значения у разных пилотов означают, что дело не в смелости, а в технике." />
+
+      <button
+        onClick={() => toggleGhost(d)}
+        disabled={lapMode === 'best'}
+        title={lapMode === 'best'
+          ? 'Уже включён режим «лучший круг» — сравнивать его с самим собой нечем. Переключитесь на усреднённый круг.'
+          : 'Ставит лучший круг этого пилота отдельной колонкой рядом с его обычным — в «Поворотах», «Графиках» и «Повторе». В «Обзоре» и «Стабильности» он не появится: там считается по всем кругам заезда.'}
+        className={`mt-3 w-full text-[11px] px-2 py-1.5 rounded border transition
+          disabled:opacity-40 disabled:cursor-not-allowed
+          ${ghostOn
+            ? 'border-[var(--muted-2)] bg-[var(--panel-2)] text-[var(--text)]'
+            : 'border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]'}`}>
+        {ghostOn ? '− убрать свой лучший круг' : '+ сравнить со своим лучшим кругом'}
+      </button>
     </div>
   );
 }

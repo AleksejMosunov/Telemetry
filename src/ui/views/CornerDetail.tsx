@@ -15,7 +15,7 @@ function CornerMap({ ctx, zoneIndex, height = 260, hoverK }: {
   /** место под курсором графика скорости: индекс точки внутри зоны */
   hoverK?: number | null;
 }) {
-  const { a, color, LAT, LATSD, Z, V, ZU } = ctx;
+  const { a, cmp, color, LAT, LATSD, Z, V, ZU } = ctx;
   const cv = useRef<HTMLCanvasElement>(null);
   const box = useRef<HTMLDivElement>(null);
 
@@ -34,7 +34,7 @@ function CornerMap({ ctx, zoneIndex, height = 260, hoverK }: {
     ctx2.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx2.clearRect(0, 0, W, H);
 
-    const lines = a.drivers.map(d => ({ d, xy: lineXY(a, LAT(d), idxs) }));
+    const lines = cmp.map(d => ({ d, xy: lineXY(a, LAT(d), idxs) }));
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const i of idxs) {
       minX = Math.min(minX, a.track.x[i]); maxX = Math.max(maxX, a.track.x[i]);
@@ -55,7 +55,7 @@ function CornerMap({ ctx, zoneIndex, height = 260, hoverK }: {
     ctx2.stroke();
 
     // коридор разброса: где линия гуляет от круга к кругу
-    for (const d of a.drivers) {
+    for (const d of cmp) {
       const sd = LATSD(d);
       if (!sd) continue;
       const lat = LAT(d);
@@ -149,7 +149,7 @@ function CornerMap({ ctx, zoneIndex, height = 260, hoverK }: {
         ctx2.strokeStyle = '#0a0c10'; ctx2.lineWidth = 2; ctx2.stroke();
       }
     }
-  }, [a, zoneIndex, height, color, LAT, LATSD, Z, V, ZU, hoverK]);
+  }, [a, cmp, zoneIndex, height, color, LAT, LATSD, Z, V, ZU, hoverK]);
 
   return <div ref={box} style={{ width: '100%' }}><canvas ref={cv} style={{ display: 'block' }} /></div>;
 }
@@ -204,24 +204,24 @@ function diagnose(ctx: ViewCtx, d: DriverResult, zi: number): string[] {
 }
 
 export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: number }) {
-  const { a, ref, name, color, V, Z } = ctx;
+  const { a, cmp, ref, name, color, V, Z } = ctx;
   /** точка под курсором графика скорости — её же показываем на карте зоны */
   const [hoverK, setHoverK] = useState<number | null>(null);
   const z = a.zones[zoneIndex];
   const c = z.corner;
   const N = a.grid.length;
   const idxs = useMemo(() => zoneIndices(z.sStart, z.sEnd, a.track.n), [z, a]);
-  const others = a.drivers.filter(d => d.id !== ref.id);
+  const others = cmp.filter(d => d.id !== ref.id);
 
   const chart = useMemo(() => {
     const xs = idxs.map((_, k) => k);
-    const rows = a.drivers.map(d => idxs.map(i => V(d)[i]));
+    const rows = cmp.map(d => idxs.map(i => V(d)[i]));
     const series: uPlot.Series[] = [
       { label: 'м' },
-      ...a.drivers.map(d => ({ label: name(d), stroke: color(d), width: d.id === ref.id ? 2.2 : 1.8 })),
+      ...cmp.map(d => ({ label: name(d), stroke: color(d), width: d.id === ref.id ? 2.2 : 1.8 })),
     ];
     return { data: [xs, ...rows] as unknown as uPlot.AlignedData, series };
-  }, [idxs, a, V, name, color, ref]);
+  }, [idxs, a, cmp, V, name, color, ref]);
 
   const bands = useMemo(() => {
     const s = idxs.indexOf(Math.round(c.sStart) % a.track.n);
@@ -309,7 +309,7 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
         <thead>
           <tr className="text-[10px] text-[var(--muted)]">
             <th className="text-left font-normal pb-1.5" />
-            {a.drivers.map(d => (
+            {cmp.map(d => (
               <th key={d.id} className="text-right font-normal pb-1.5">
                 <span className="inline-flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full" style={{ background: color(d) }} />
@@ -327,7 +327,7 @@ export function CornerDetail({ ctx, zoneIndex }: { ctx: ViewCtx; zoneIndex: numb
                 <td className="py-1.5 text-[var(--muted)] decoration-dotted decoration-[var(--muted-2)] underline underline-offset-[3px] cursor-help">
                   {m.label}
                 </td>
-                {a.drivers.map(dr => {
+                {cmp.map(dr => {
                   const v = m.get(dr);
                   const dd = v - rv;
                   const good = m.up ? dd > 0 : dd < 0;

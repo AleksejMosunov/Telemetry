@@ -31,6 +31,9 @@ export interface DriverStats {
 
 export interface DriverResult {
   id: string; name: string; fileName: string;
+  /** Заполнено только у «призрака» — копии пилота, подставленной для сравнения
+   *  с самим собой. Хранит id настоящего заезда, из которого призрак сделан. */
+  ghostOf?: string;
   /** Устойчивый ключ заезда — по нему запоминается заданное пользователем имя пилота. */
   fingerprint: string;
   meta: Record<string, string>;
@@ -62,6 +65,36 @@ export interface DriverResult {
   zoneSigma: Float64Array;
   /** зонные времена снятых кругов: нужны только чтобы показать их в таблице */
   excludedRows: { lapIndex: number; time: number; row: Float64Array }[];
+}
+
+/**
+ * Копия пилота, у которой усреднённый круг подменён его собственным лучшим.
+ *
+ * Нужна, чтобы сравнить пилота с самим собой: в сравнительных вкладках призрак
+ * встаёт отдельной колонкой рядом с оригиналом, и вся механика дельт работает
+ * без изменений — для неё это просто ещё один участник.
+ *
+ * В «Обзоре», «Стабильности» и «Выводах» призрак не участвует намеренно: там
+ * считается по всем кругам заезда (медиана, разброс, ход стинта, помехи),
+ * а у призрака круг ровно один, и такие цифры для него бессмысленны.
+ */
+export function bestLapGhost(d: DriverResult): DriverResult {
+  const best = d.laps[d.bestIdx];
+  return {
+    ...d,
+    id: `${d.id}~best`,
+    ghostOf: d.id,
+    medV: d.bestV, medT: d.bestT, medLat: d.bestLat,
+    medPathByZone: d.bestPathByZone,
+    unwindByZone: Float64Array.from(d.zoneBest, z => z.sUnwind),
+    zoneMed: d.zoneBest,
+    // Разброса линии по кругам у одиночного круга нет — коридор рисовать нечем.
+    medLatSd: new Float64Array(0),
+    traces: d.traces.filter(t => t.lapIndex === best?.index),
+    // Медиана призрака — это и есть его единственный круг: по ней сортируются
+    // «кто медленнее» в сравнительных таблицах.
+    stats: { ...d.stats, median: d.stats.best },
+  };
 }
 
 export interface Analysis {

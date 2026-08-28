@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { gzipSync } from 'zlib';
-import { analyze, analyzeSessions } from '../src/core/pipeline';
+import { analyze, analyzeSessions, bestLapGhost } from '../src/core/pipeline';
 import { parseAimCsv } from '../src/core/parse';
 import { packSession, unpackSession } from '../src/core/pack';
 import { matchTracks, type TrackSignature } from '../src/core/trackid';
@@ -217,6 +217,23 @@ for (const d of a.drivers) {
   checks.push(['T6: распрямление не срабатывает на сбросе дуги в середине шпильки',
     t6 >= 0 && vals.every(v => v >= 25),
     vals.map(v => `${v.toFixed(0)} м`).join(', ')]);
+}
+
+// Призрак «свой лучший круг» должен вести себя как обычный участник сравнения:
+// его зонные времена складываются в его же круг, и это именно лучший круг заезда.
+for (const d of a.drivers) {
+  const g = bestLapGhost(d);
+  const sumG = g.zoneMed.reduce((s, z) => s + z.tZone, 0);
+  const sumD = d.zoneMed.reduce((s, z) => s + z.tZone, 0);
+  checks.push([`призрак собирается из лучшего круга (${d.name})`,
+    g.ghostOf === d.id && g.traces.length === 1 && g.medLatSd.length === 0,
+    `traces ${g.traces.length}, коридор разброса ${g.medLatSd.length}`]);
+  checks.push([`сумма зон призрака равна его кругу (${d.name})`,
+    Math.abs(sumG - d.stats.best) < 0.1,
+    `${sumG.toFixed(3)} против лучшего ${d.stats.best.toFixed(3)}`]);
+  checks.push([`призрак быстрее обычного круга (${d.name})`,
+    sumG < sumD,
+    `${(sumG - sumD).toFixed(3)} с по сумме зон`]);
 }
 
 let bad = 0;

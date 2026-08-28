@@ -50,7 +50,7 @@ const GROUPS: Array<{ name: string; items: Metric[] }> = [
 ];
 
 export function Corners({ ctx }: { ctx: ViewCtx }) {
-  const { a, ref, name, color, Z, V, ZU } = ctx;
+  const { a, cmp, ref, name, color, Z, V, ZU } = ctx;
   const [metric, setMetric] = useState<Metric>('dt');
   const [sel, setSel] = useState<number | null>(null);
   const [pinned, setPinned] = useState<number | null>(null);
@@ -62,7 +62,7 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
   lastInGroup.current[group.name] = metric;
 
   const rows = useMemo(() => a.zones.map((z, i) => {
-    const cells = a.drivers.map(d => {
+    const cells = cmp.map(d => {
       const zs = Z(d)[i], rs = Z(ref)[i];
       switch (metric) {
         case 'dt': return { v: zs.tZone - rs.tZone, raw: zs.tZone, d: zs.tZone - rs.tZone };
@@ -87,9 +87,9 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
       }
     });
     return { z, i, cells };
-  }), [a, ref, metric, Z, V, ZU]);
+  }), [a, cmp, ref, metric, Z, V, ZU]);
 
-  const totals = a.drivers.map(d => {
+  const totals = cmp.map(d => {
     const t = a.zones.reduce((s, _, i) => s + Z(d)[i].tZone, 0);
     const r = a.zones.reduce((s, _, i) => s + Z(ref)[i].tZone, 0);
     return t - r;
@@ -108,11 +108,11 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
 
   /** Пилот, чьи потери показывает карта: самый медленный из неопорных. */
   const lossOf = useMemo(() => {
-    const others = a.drivers.filter(d => d.id !== ref.id);
+    const others = cmp.filter(d => d.id !== ref.id);
     return others.length
       ? others.reduce((p, q) => (p.stats.median >= q.stats.median ? p : q))
       : null;
-  }, [a, ref]);
+  }, [cmp, ref]);
 
   const mapValues = useMemo(
     () => (lossOf ? deltaRate(ctx.T(lossOf), ctx.T(ref)) : V(ref)),
@@ -135,7 +135,7 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
       const dt = Z(lossOf)[zi].tZone - Z(ref)[zi].tZone;
       return `${dt >= 0 ? '+' : '−'}${Math.abs(dt).toFixed(2)}`;
     };
-  }, [lossOf, a, ref, Z, V]);
+  }, [lossOf, a, cmp, ref, Z, V]);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_470px] items-start">
@@ -183,7 +183,7 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
             <thead>
               <tr className="text-[var(--muted)] text-[11px]">
                 <th className="text-left font-normal px-4 py-2 sticky left-0 bg-[var(--panel)]">пов.</th>
-                {a.drivers.map(d => (
+                {cmp.map(d => (
                   <th key={d.id} className="text-right font-normal px-3 py-2 min-w-[110px]">
                     <span className="inline-flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full" style={{ background: color(d) }} />
@@ -214,7 +214,7 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
                     </span>
                   </td>
                   {cells.map((c, k) => {
-                    const isRef = a.drivers[k].id === ref.id;
+                    const isRef = cmp[k].id === ref.id;
                     const good = lowerBetter ? c.d < 0 : c.d > 0;
                     return (
                       <td key={k} className="px-3 py-2 text-right relative">
@@ -251,7 +251,7 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
                     круг
                     <span className="text-[var(--muted-2)] ml-2 text-[10px] font-normal">сумма всех зон</span>
                   </td>
-                  {a.drivers.map((d, k) => (
+                  {cmp.map((d, k) => (
                     <td key={d.id} className="px-3 py-2.5 text-right">
                       {d.id === ref.id ? <span className="text-[var(--muted)]">опорный</span>
                         : <span style={{ color: deltaColor(totals[k]) }}>{delta(totals[k])}</span>}

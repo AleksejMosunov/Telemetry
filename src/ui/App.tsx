@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Analysis, DriverResult } from '../core/pipeline';
-import { driverColor } from '../core/pipeline';
+import { driverColor, bestLapGhost } from '../core/pipeline';
 import { lapTime, plural } from './format';
 import type { WorkerSource } from '../worker';
 import {
@@ -93,6 +93,14 @@ type Tab = typeof TABS[number][0];
 
 export interface ViewCtx {
   a: Analysis;
+  /** Кого показывать в сравнительных вкладках: заезды плюс включённые призраки
+   *  «свой лучший круг». «Обзор», «Стабильность» и «Выводы» этим списком не
+   *  пользуются — они считают по всем кругам заезда и берут a.drivers. */
+  cmp: DriverResult[];
+  /** id заездов, для которых включён призрак лучшего круга */
+  ghosts: string[];
+  /** включить/выключить призрака для заезда */
+  toggleGhost: (d: DriverResult) => void;
   ref: DriverResult;
   refId: string;
   lapMode: LapMode;
@@ -130,6 +138,10 @@ export function App() {
   const [err, setErr] = useState<string | null>(null);
   const [refId, setRefId] = useState('d0');
   const [lapMode, setLapMode] = useState<LapMode>('median');
+  const [ghosts, setGhosts] = useState<string[]>([]);
+  const toggleGhost = useCallback((d: DriverResult) => {
+    setGhosts(g => (g.includes(d.id) ? g.filter(x => x !== d.id) : [...g, d.id]));
+  }, []);
   const [tab, setTab] = useState<Tab>('overview');
   const [cursorS, setCursorS] = useState<number | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
@@ -354,12 +366,23 @@ export function App() {
     if (!a) return null;
     const ref = a.drivers.find(d => d.id === refId) ?? a.drivers[0];
     refIdRef.current = ref.fingerprint;
-    const idx = (d: DriverResult) => a.drivers.indexOf(d);
+    // В режиме «лучший круг» призрак совпал бы с оригиналом, поэтому там его нет.
+    const cmp = lapMode === 'best'
+      ? a.drivers
+      : a.drivers.flatMap(d => (ghosts.includes(d.id) ? [d, bestLapGhost(d)] : [d]));
+    // Цвет берётся по месту в списке сравнения, иначе призрак остался бы без цвета.
+    const idx = (d: DriverResult) => cmp.findIndex(x => x.id === d.id);
+    const own = (d: DriverResult) => (names[d.id]?.trim() ? names[d.id].trim() : d.name);
     return {
-      a, ref, refId: ref.id, lapMode, busy,
+      a, cmp, ghosts, toggleGhost, ref, refId: ref.id, lapMode, busy,
       sectors, sectorCuts, saveSectors,
-      name: (d) => (names[d.id]?.trim() ? names[d.id].trim() : d.name),
-      color: (d) => driverColor(idx(d)),
+      // Призрак наследует имя своего заезда — в том числе вписанное вручную.
+      name: (d) => {
+        if (!d.ghostOf) return own(d);
+        const p = a.drivers.find(x => x.id === d.ghostOf);
+        return `${p ? own(p) : d.name} · лучший круг`;
+      },
+      color: (d) => driverColor(Math.max(0, idx(d))),
       V: (d) => (lapMode === 'best' ? d.bestV : d.medV),
       T: (d) => (lapMode === 'best' ? d.bestT : d.medT),
       LAT: (d) => (lapMode === 'best' ? d.bestLat : d.medLat),
@@ -368,11 +391,13 @@ export function App() {
       ZU: (d) => (lapMode === 'best'
         ? Float64Array.from(d.zoneBest, z => z.sUnwind)
         : d.unwindByZone),
-      LATSD: (d) => (lapMode === 'best' ? null : d.medLatSd),
+      // У призрака один круг — коридора разброса нет.
+      LATSD: (d) => (lapMode === 'best' || d.ghostOf ? null : d.medLatSd),
       exclOf: (d) => excl[d.fingerprint] ?? [],
       setExcl,
     };
-  }, [a, refId, lapMode, names, excl, setExcl, busy, sectors, sectorCuts, saveSectors]);
+  }, [a, refId, lapMode, names, excl, setExcl, busy, sectors, sectorCuts, saveSectors,
+      ghosts, toggleGhost]);
 
   const ctx: ViewCtx | null = useMemo(
     () => (base ? { ...base, cursorS, setCursorS } : null),

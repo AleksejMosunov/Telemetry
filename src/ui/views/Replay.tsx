@@ -37,14 +37,14 @@ const SPEEDS = [0.25, 0.5, 1, 2] as const;
 const TRAIL = 30;   // длина хвоста за картом, м
 
 export function Replay({ ctx }: { ctx: ViewCtx }) {
-  const { a, ref, name, color, lapMode } = ctx;
+  const { a, cmp, ref, name, color, lapMode } = ctx;
 
   // Какой круг показывать за каждого пилота: по умолчанию тот же режим,
   // что и во всём приложении, но здесь можно выбрать и конкретный круг.
   const [pick, setPick] = useState<Record<string, string>>({});
   const choiceOf = (d: DriverResult) => pick[d.id] ?? lapMode;
 
-  const runners = useMemo<Runner[]>(() => a.drivers.map(d => {
+  const runners = useMemo<Runner[]>(() => cmp.map(d => {
     const c = choiceOf(d);
     if (c === 'best') {
       return { d, label: 'лучший круг', color: color(d), t: d.bestT, v: d.bestV, lat: d.bestLat, total: d.bestT[d.bestT.length - 1] };
@@ -55,7 +55,7 @@ export function Replay({ ctx }: { ctx: ViewCtx }) {
     const li = Number(c);
     const tr = d.traces.find(t => t.lapIndex === li) ?? d.traces[0];
     return { d, label: `круг #${tr.lapIndex}`, color: color(d), t: tr.t, v: tr.v, lat: tr.lat, total: tr.t[tr.t.length - 1] };
-  }), [a, pick, lapMode, color]);
+  }), [cmp, pick, lapMode, color]);
 
   const refRunner = runners.find(r => r.d.id === ref.id) ?? runners[0];
   const duration = Math.max(...runners.map(r => r.total));
@@ -219,8 +219,9 @@ export function Replay({ ctx }: { ctx: ViewCtx }) {
           ))}
           {runners.length === 1 && (
             <div className="text-[11px] text-[var(--muted-2)] leading-relaxed mt-1">
-              Загружен один заезд — сравнивать не с чем. Выберите разные круги одного пилота,
-              чтобы посмотреть свой лучший против обычного, или добавьте второй заезд.
+              Загружен один заезд — сравнивать не с чем. Включите в «Обзоре»
+              «сравнить со своим лучшим кругом», чтобы поставить рядом второго себя,
+              или добавьте второй заезд.
             </div>
           )}
         </div>
