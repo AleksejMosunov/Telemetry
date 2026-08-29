@@ -19,7 +19,7 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
   const { a, ref, name, color, V, T } = ctx;
   const [mode, setMode] = useState<MapMode>('speed');
   const [hoverS, setHoverS] = useState<number | null>(null);
-  const others = a.drivers.filter(d => d.id !== ref.id);
+  const others = a.drivers.filter(d => d.id !== ctx.refBase.id);
   const [deltaOf, setDeltaOf] = useState(others[0]?.id ?? ref.id);
   const deltaDriver = a.drivers.find(x => x.id === deltaOf) ?? ref;
 
@@ -60,8 +60,8 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
 
   const mapValues = useMemo(
     () => (mode === 'delta'
-      ? deltaRate(T(ctx.view(deltaDriver)), T(ctx.view(ref)))
-      : V(ctx.view(ref))),
+      ? deltaRate(T(ctx.view(deltaDriver)), T(ref))
+      : V(ref)),
     [mode, deltaDriver, ref, T, V, ctx],
   );
 
@@ -75,12 +75,12 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
   const cornerLabel = useMemo(() => {
     if (mode === 'lines') return undefined;
     if (mode === 'speed') {
-      return (ci: number) => `${V(ctx.view(ref))[Math.round(a.corners[ci].sApex) % a.grid.length].toFixed(0)}`;
+      return (ci: number) => `${V(ref)[Math.round(a.corners[ci].sApex) % a.grid.length].toFixed(0)}`;
     }
     return (ci: number) => {
       const zi = a.zones.findIndex(z => z.corner.id === a.corners[ci].id);
       if (zi < 0) return null;
-      const dt = ctx.Z(deltaDriver)[zi].tZone - ctx.Z(ref)[zi].tZone;
+      const dt = ctx.Z(ctx.view(deltaDriver))[zi].tZone - ctx.Z(ref)[zi].tZone;
       return `${dt >= 0 ? '+' : '−'}${Math.abs(dt).toFixed(2)}`;
     };
   }, [mode, a, ref, V, ctx, deltaDriver]);
@@ -231,11 +231,13 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
 }
 
 function DriverCard({ d, ctx }: { d: DriverResult; ctx: ViewCtx }) {
-  const { ref, name, color, ghosts, toggleGhost, lapMode, lapPick, setLapPick } = ctx;
-  const isRef = d.id === ref.id;
+  const { refBase, name, color, ghosts, toggleGhost, lapMode, lapPick, setLapPick } = ctx;
+  // Карточка целиком про заезд, а не про выбранный круг, поэтому сравнивается
+  // с настоящим опорным заездом, а не с его копией.
+  const isRef = d.id === refBase.id;
   const ghostOn = ghosts.includes(d.id);
-  const dBest = d.stats.best - ref.stats.best;
-  const dPath = d.stats.medianPath - ref.stats.medianPath;
+  const dBest = d.stats.best - refBase.stats.best;
+  const dPath = d.stats.medianPath - refBase.stats.medianPath;
   const clean = d.laps.filter(l => l.clean).length;
 
   return (
@@ -253,8 +255,8 @@ function DriverCard({ d, ctx }: { d: DriverResult; ctx: ViewCtx }) {
       <div className="text-[11px] text-[var(--muted-2)] mb-3">лучший круг · {clean} чистых кругов</div>
       <Row label="медиана" value={lapTime(d.stats.median)}
         hint="Время круга, ровно посередине между лучшим и худшим: половина кругов быстрее, половина медленнее. Показывает реальный темп, а не разовую удачу."
-        extra={isRef ? null : delta(d.stats.median - ref.stats.median)}
-        extraColor={deltaColor(d.stats.median - ref.stats.median)} />
+        extra={isRef ? null : delta(d.stats.median - refBase.stats.median)}
+        extraColor={deltaColor(d.stats.median - refBase.stats.median)} />
       <Row label="разброс кругов" value={`±${d.stats.sd.toFixed(3)} с`}
         hint={`В двух третях кругов пилот укладывается в ${lapTime(d.stats.median)} плюс-минус ${d.stats.sd.toFixed(3)} с. Меньше — ровнее едет. В статистике эту величину называют сигмой (σ) или стандартным отклонением.`} />
       <Row label="длина траектории" value={`${num(d.stats.medianPath)} м`}

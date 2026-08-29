@@ -184,13 +184,20 @@ export function Corners({ ctx }: { ctx: ViewCtx }) {
               <tr className="text-[var(--muted)] text-[11px]">
                 <th className="text-left font-normal px-4 py-2 sticky left-0 bg-[var(--panel)]">пов.</th>
                 {cmp.map(d => (
-                  <th key={d.id} className="text-right font-normal px-3 py-2 min-w-[110px]">
+                  <th key={d.id} className="text-right font-normal px-3 py-2 min-w-[110px] align-bottom">
                     <span className="inline-flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full" style={{ background: color(d) }} />
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color(d) }} />
                       <span className="truncate max-w-[160px]">
-                        {name(d)}<span className="text-[var(--muted-2)] font-normal">, {unit}</span>
+                        {ctx.nameParts(d).base}<span className="text-[var(--muted-2)] font-normal">, {unit}</span>
                       </span>
                     </span>
+                    {/* Номер круга не обрезается вместе с именем — иначе не видно,
+                        какой именно круг стоит в колонке. */}
+                    {ctx.nameParts(d).tag && (
+                      <span className="block text-[10px] text-[var(--muted-2)] font-normal whitespace-nowrap">
+                        {ctx.nameParts(d).tag}
+                      </span>
+                    )}
                   </th>
                 ))}
               </tr>

@@ -243,6 +243,25 @@ for (const d of a.drivers) {
     colorOf(cmp[0]) === colorOf(a.drivers[0]), colorOf(cmp[0])]);
 }
 
+// Опорный участник обязан быть среди колонок сравнения. Если брать настоящий
+// заезд, а в списке лежит копия с выбранным кругом, колонка сравнивается сама
+// с собой: у опорного появляется ненулевая дельта, а нулевой нет ни у кого.
+{
+  const d0 = a.drivers[0], d1 = a.drivers[1];
+  const lap = d0.traces[3].lapIndex;
+  const { cmp } = buildComparison(a.drivers, { [d0.id]: lap }, [], 'median');
+  const ref = cmp.find(x => x.id === d0.id) ?? cmp.find(x => x.ghostOf === d0.id)!;
+  const sum = (d: typeof d0) => d.zoneMed.reduce((s2, z) => s2 + z.tZone, 0);
+  const zeros = cmp.filter(d => Math.abs(sum(d) - sum(ref)) < 1e-9);
+  checks.push(['опорный участник есть среди колонок сравнения',
+    cmp.some(d => d.id === ref.id), `колонки: ${cmp.map(d => d.id).join(', ')}`]);
+  checks.push(['ровно у одной колонки дельта нулевая',
+    zeros.length === 1, `нулевых ${zeros.length}, опорный ${ref.id}`]);
+  checks.push(['второй заезд сравнивается с выбранным кругом, а не с заездом',
+    Math.abs((sum(d1) - sum(ref)) - (sum(d1) - sum(d0))) > 0.05,
+    `с кругом ${(sum(d1) - sum(ref)).toFixed(3)} с, с заездом ${(sum(d1) - sum(d0)).toFixed(3)} с`]);
+}
+
 // Любой круг можно подставить как участника сравнения: зонные времена такой
 // копии должны складываться в время именно этого круга, а не какого-то другого.
 for (const d of a.drivers) {

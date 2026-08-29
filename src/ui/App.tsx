@@ -93,6 +93,10 @@ type Tab = typeof TABS[number][0];
 
 export interface ViewCtx {
   a: Analysis;
+  /** Настоящий опорный заезд — для «Обзора», где показывают статистику по всему
+   *  заезду. Для дельт он не годится: если у него выбран конкретный круг,
+   *  сравнивать надо именно с этим кругом, иначе колонка сравнится сама с собой. */
+  refBase: DriverResult;
   /** Кого показывать в сравнительных вкладках: заезды плюс включённые призраки
    *  «свой лучший круг». «Обзор», «Стабильность» и «Выводы» этим списком не
    *  пользуются — они считают по всем кругам заезда и берут a.drivers. */
@@ -115,6 +119,9 @@ export interface ViewCtx {
   cursorS: number | null;
   setCursorS: (s: number | null) => void;
   name: (d: DriverResult) => string;
+  /** То же имя, но разбитое: заезд и пометка выбранного круга. Нужно там, где
+   *  имя обрезается по ширине — номер круга прятать нельзя. */
+  nameParts: (d: DriverResult) => { base: string; tag: string | null };
   color: (d: DriverResult) => string;
   V: (d: DriverResult) => Float64Array;
   T: (d: DriverResult) => Float64Array;
@@ -381,16 +388,33 @@ export function App() {
   // ряды графиков — отсюда рывки. Поэтому курсор подмешивается отдельно.
   const base = useMemo((): Omit<ViewCtx, 'cursorS' | 'setCursorS'> | null => {
     if (!a) return null;
-    const ref = a.drivers.find(d => d.id === refId) ?? a.drivers[0];
-    refIdRef.current = ref.fingerprint;
-    // В режиме «лучший круг» призрак совпал бы с оригиналом, поэтому там его нет.
+    const refBase = a.drivers.find(d => d.id === refId) ?? a.drivers[0];
+    refIdRef.current = refBase.fingerprint;
     const { cmp, colorOf } = buildComparison(a.drivers, lapPick, ghosts, lapMode);
+    const viewOf = (d: DriverResult) =>
+      cmp.find(x => x.id === d.id) ?? cmp.find(x => x.ghostOf === d.id) ?? d;
+    // Опорный для дельт — это колонка в сравнении, а не сам заезд: при выбранном
+    // круге в списке лежит копия, и сравнивать надо именно с ней. Иначе колонка
+    // сравнивается сама с собой, а настоящего заезда среди колонок вообще нет.
+    const ref = viewOf(refBase);
     const own = (d: DriverResult) => (names[d.id]?.trim() ? names[d.id].trim() : d.name);
     return {
-      a, cmp, ghosts, toggleGhost, lapPick, setLapPick, ref, refId: ref.id, lapMode, busy,
+      a, cmp, ghosts, toggleGhost, lapPick, setLapPick,
+      ref, refBase, refId: refBase.id, lapMode, busy,
       sectors, sectorCuts, saveSectors,
       // Копия наследует имя своего заезда — в том числе вписанное вручную,
       // и подписывается номером круга: иначе две колонки одного пилота не различить.
+      // Части отдаются отдельно, чтобы в узкой шапке таблицы обрезалось имя,
+      // а номер круга оставался виден целиком.
+      nameParts: (d) => {
+        if (!d.ghostOf || d.lapOf == null) return { base: own(d), tag: null };
+        const p = a.drivers.find(x => x.id === d.ghostOf);
+        const isBest = p && p.laps[p.bestIdx]?.index === d.lapOf;
+        return {
+          base: p ? own(p) : d.name,
+          tag: `круг #${d.lapOf}${isBest ? ' (лучший)' : ''}`,
+        };
+      },
       name: (d) => {
         if (!d.ghostOf || d.lapOf == null) return own(d);
         const p = a.drivers.find(x => x.id === d.ghostOf);
@@ -398,7 +422,7 @@ export function App() {
         return `${p ? own(p) : d.name} · круг #${d.lapOf}${isBest ? ' (лучший)' : ''}`;
       },
       color: colorOf,
-      view: (d) => cmp.find(x => x.id === d.id) ?? cmp.find(x => x.ghostOf === d.id) ?? d,
+      view: viewOf,
       V: (d) => (lapMode === 'best' ? d.bestV : d.medV),
       T: (d) => (lapMode === 'best' ? d.bestT : d.medT),
       LAT: (d) => (lapMode === 'best' ? d.bestLat : d.medLat),
