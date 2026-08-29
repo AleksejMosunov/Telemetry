@@ -227,7 +227,7 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
 }
 
 function DriverCard({ d, ctx }: { d: DriverResult; ctx: ViewCtx }) {
-  const { ref, name, color, ghosts, toggleGhost, lapMode } = ctx;
+  const { ref, name, color, ghosts, toggleGhost, lapMode, lapPick, setLapPick } = ctx;
   const isRef = d.id === ref.id;
   const ghostOn = ghosts.includes(d.id);
   const dBest = d.stats.best - ref.stats.best;
@@ -265,13 +265,35 @@ function DriverCard({ d, ctx }: { d: DriverResult; ctx: ViewCtx }) {
       <Row label="пик перегрузки" value={`${num(d.stats.peakG, 2)} g`}
         hint="Наибольшее суммарное ускорение за круг — торможение и поворот вместе. Показывает, насколько пилот готов давить. Одинаковые значения у разных пилотов означают, что дело не в смелости, а в технике." />
 
+      <label className="flex items-center justify-between gap-2 mt-3 text-[11px]"
+        title="Каким кругом этот заезд участвует в сравнении. «как у всех» — общий режим сверху (усреднённый или лучший). Выбранный круг действует в «Поворотах», «Графиках» и «Повторе».">
+        <span className="text-[var(--muted)] decoration-dotted decoration-[var(--muted-2)]
+          underline underline-offset-[3px] cursor-help shrink-0">круг для сравнения</span>
+        <select
+          value={lapPick[d.id] ?? ''}
+          onChange={e => setLapPick(d, e.target.value === '' ? null : Number(e.target.value))}
+          className="num bg-[var(--panel-2)] border border-[var(--line)] rounded px-1.5 py-1
+            text-[11px] outline-none focus:border-[var(--muted-2)] [color-scheme:dark] min-w-0">
+          <option value="">как у всех</option>
+          {d.traces.map(t => {
+            const l = d.laps.find(x => x.index === t.lapIndex);
+            const isBest = d.laps[d.bestIdx]?.index === t.lapIndex;
+            return (
+              <option key={t.lapIndex} value={t.lapIndex}>
+                #{t.lapIndex} · {lapTime(l?.time ?? 0)}{isBest ? ' (лучший)' : ''}
+              </option>
+            );
+          })}
+        </select>
+      </label>
+
       <button
         onClick={() => toggleGhost(d)}
         disabled={lapMode === 'best'}
         title={lapMode === 'best'
           ? 'Уже включён режим «лучший круг» — сравнивать его с самим собой нечем. Переключитесь на усреднённый круг.'
           : 'Ставит лучший круг этого пилота отдельной колонкой рядом с его обычным — в «Поворотах», «Графиках» и «Повторе». В «Обзоре» и «Стабильности» он не появится: там считается по всем кругам заезда.'}
-        className={`mt-3 w-full text-[11px] px-2 py-1.5 rounded border transition
+        className={`mt-2 w-full text-[11px] px-2 py-1.5 rounded border transition
           disabled:opacity-40 disabled:cursor-not-allowed
           ${ghostOn
             ? 'border-[var(--muted-2)] bg-[var(--panel-2)] text-[var(--text)]'

@@ -7,7 +7,6 @@ import { lapTime, num } from '../format';
 /** Один «призрак» на карте: конкретный круг конкретного пилота. */
 interface Runner {
   d: DriverResult;
-  label: string;
   color: string;
   t: Float64Array;      // время от старта круга на каждом метре
   v: Float64Array;
@@ -37,25 +36,14 @@ const SPEEDS = [0.25, 0.5, 1, 2] as const;
 const TRAIL = 30;   // длина хвоста за картом, м
 
 export function Replay({ ctx }: { ctx: ViewCtx }) {
-  const { a, cmp, ref, name, color, lapMode } = ctx;
+  const { a, cmp, ref, name, color, lapMode, lapPick, setLapPick, V, T, LAT } = ctx;
 
-  // Какой круг показывать за каждого пилота: по умолчанию тот же режим,
-  // что и во всём приложении, но здесь можно выбрать и конкретный круг.
-  const [pick, setPick] = useState<Record<string, string>>({});
-  const choiceOf = (d: DriverResult) => pick[d.id] ?? lapMode;
-
+  // Выбор круга общий для всего приложения, а не свой у повтора: иначе таблицы
+  // и повтор показывали бы разные круги одного пилота и расходились в цифрах.
   const runners = useMemo<Runner[]>(() => cmp.map(d => {
-    const c = choiceOf(d);
-    if (c === 'best') {
-      return { d, label: 'лучший круг', color: color(d), t: d.bestT, v: d.bestV, lat: d.bestLat, total: d.bestT[d.bestT.length - 1] };
-    }
-    if (c === 'median') {
-      return { d, label: 'усреднённый круг', color: color(d), t: d.medT, v: d.medV, lat: d.medLat, total: d.medT[d.medT.length - 1] };
-    }
-    const li = Number(c);
-    const tr = d.traces.find(t => t.lapIndex === li) ?? d.traces[0];
-    return { d, label: `круг #${tr.lapIndex}`, color: color(d), t: tr.t, v: tr.v, lat: tr.lat, total: tr.t[tr.t.length - 1] };
-  }), [cmp, pick, lapMode, color]);
+    const t = T(d);
+    return { d, color: color(d), t, v: V(d), lat: LAT(d), total: t[t.length - 1] };
+  }), [cmp, color, V, T, LAT]);
 
   const refRunner = runners.find(r => r.d.id === ref.id) ?? runners[0];
   const duration = Math.max(...runners.map(r => r.total));
@@ -202,19 +190,26 @@ export function Replay({ ctx }: { ctx: ViewCtx }) {
                   </span>
                 )}
               </div>
-              <select
-                value={choiceOf(r.d)}
-                onChange={e => { setPick(p => ({ ...p, [r.d.id]: e.target.value })); seek(0); setPlaying(false); }}
-                className="mt-2 w-full bg-[var(--panel-2)] border border-[var(--line)] rounded px-2 py-1
-                  text-[11px] num text-[var(--muted)] outline-none focus:border-[var(--muted-2)]">
-                <option value="median">усреднённый круг · {lapTime(r.d.medT[r.d.medT.length - 1])}</option>
-                <option value="best">лучший круг · {lapTime(r.d.stats.best)}</option>
-                {r.d.traces.map(t => (
-                  <option key={t.lapIndex} value={String(t.lapIndex)}>
-                    круг #{t.lapIndex} · {lapTime(t.t[t.t.length - 1])}
+              {/* У копии, привязанной к кругу, выбирать нечего — она и есть круг. */}
+              {!r.d.ghostOf && (
+                <select
+                  value={lapPick[r.d.id] ?? ''}
+                  onChange={e => {
+                    setLapPick(r.d, e.target.value === '' ? null : Number(e.target.value));
+                    seek(0); setPlaying(false);
+                  }}
+                  className="mt-2 w-full bg-[var(--panel-2)] border border-[var(--line)] rounded px-2 py-1
+                    text-[11px] num text-[var(--muted)] outline-none focus:border-[var(--muted-2)]">
+                  <option value="">
+                    {lapMode === 'best' ? 'лучший круг' : 'усреднённый круг'} · как у всех
                   </option>
-                ))}
-              </select>
+                  {r.d.traces.map(t => (
+                    <option key={t.lapIndex} value={String(t.lapIndex)}>
+                      круг #{t.lapIndex} · {lapTime(t.t[t.t.length - 1])}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           ))}
           {runners.length === 1 && (

@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { gzipSync } from 'zlib';
-import { analyze, analyzeSessions, bestLapGhost } from '../src/core/pipeline';
+import { analyze, analyzeSessions, bestLapGhost, lapView } from '../src/core/pipeline';
 import { parseAimCsv } from '../src/core/parse';
 import { packSession, unpackSession } from '../src/core/pack';
 import { matchTracks, type TrackSignature } from '../src/core/trackid';
@@ -218,6 +218,23 @@ for (const d of a.drivers) {
     t6 >= 0 && vals.every(v => v >= 25),
     vals.map(v => `${v.toFixed(0)} м`).join(', ')]);
 }
+
+// Любой круг можно подставить как участника сравнения: зонные времена такой
+// копии должны складываться в время именно этого круга, а не какого-то другого.
+for (const d of a.drivers) {
+  let worst = 0, worstLap = -1;
+  for (const t of d.traces) {
+    const v = lapView(d, t.lapIndex);
+    const lap = d.laps.find(l => l.index === t.lapIndex)!;
+    const gap = Math.abs(v.zoneMed.reduce((s2, z) => s2 + z.tZone, 0) - lap.time);
+    if (gap > worst) { worst = gap; worstLap = t.lapIndex; }
+  }
+  checks.push([`любой круг подставляется как участник (${d.name})`,
+    worst < 0.12,
+    `${d.traces.length} кругов, худшее расхождение ${worst.toFixed(3)} с на #${worstLap}`]);
+}
+checks.push(['несуществующий круг не подменяется чужим',
+  a.drivers.every(d => lapView(d, 99999).id === d.id), 'возвращается исходный заезд']);
 
 // Призрак «свой лучший круг» должен вести себя как обычный участник сравнения:
 // его зонные времена складываются в его же круг, и это именно лучший круг заезда.

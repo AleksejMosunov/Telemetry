@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Analysis, DriverResult } from '../core/pipeline';
-import { driverColor, bestLapGhost } from '../core/pipeline';
+import { driverColor, bestLapGhost, lapView } from '../core/pipeline';
 import { lapTime, plural } from './format';
 import type { WorkerSource } from '../worker';
 import {
@@ -101,6 +101,10 @@ export interface ViewCtx {
   ghosts: string[];
   /** включить/выключить призрака для заезда */
   toggleGhost: (d: DriverResult) => void;
+  /** заезд -> номер круга, которым он участвует в сравнении; нет записи = как у всех */
+  lapPick: Record<string, number>;
+  /** привязать заезд к кругу; null — вернуть общий режим */
+  setLapPick: (d: DriverResult, lapIndex: number | null) => void;
   ref: DriverResult;
   refId: string;
   lapMode: LapMode;
@@ -139,6 +143,15 @@ export function App() {
   const [refId, setRefId] = useState('d0');
   const [lapMode, setLapMode] = useState<LapMode>('median');
   const [ghosts, setGhosts] = useState<string[]>([]);
+  /** заезд -> номер круга, которым он участвует в сравнении; нет записи = как у всех */
+  const [lapPick, setLapPickState] = useState<Record<string, number>>({});
+  const setLapPick = useCallback((d: DriverResult, lapIndex: number | null) => {
+    setLapPickState(m => {
+      const next = { ...m };
+      if (lapIndex == null) delete next[d.id]; else next[d.id] = lapIndex;
+      return next;
+    });
+  }, []);
   const toggleGhost = useCallback((d: DriverResult) => {
     setGhosts(g => (g.includes(d.id) ? g.filter(x => x !== d.id) : [...g, d.id]));
   }, []);
@@ -367,20 +380,28 @@ export function App() {
     const ref = a.drivers.find(d => d.id === refId) ?? a.drivers[0];
     refIdRef.current = ref.fingerprint;
     // В режиме «лучший круг» призрак совпал бы с оригиналом, поэтому там его нет.
-    const cmp = lapMode === 'best'
-      ? a.drivers
-      : a.drivers.flatMap(d => (ghosts.includes(d.id) ? [d, bestLapGhost(d)] : [d]));
+    const cmp = a.drivers.flatMap(d => {
+      // Явно выбранный круг сильнее общего режима: он и есть ответ на вопрос
+      // «сравни вот этот мой круг с вот тем его».
+      const pick = lapPick[d.id];
+      const base = pick != null ? lapView(d, pick) : d;
+      // В режиме «лучший круг» призрак совпал бы с оригиналом — там его нет.
+      const wantGhost = ghosts.includes(d.id) && (pick != null || lapMode !== 'best');
+      return wantGhost ? [base, bestLapGhost(d)] : [base];
+    });
     // Цвет берётся по месту в списке сравнения, иначе призрак остался бы без цвета.
     const idx = (d: DriverResult) => cmp.findIndex(x => x.id === d.id);
     const own = (d: DriverResult) => (names[d.id]?.trim() ? names[d.id].trim() : d.name);
     return {
-      a, cmp, ghosts, toggleGhost, ref, refId: ref.id, lapMode, busy,
+      a, cmp, ghosts, toggleGhost, lapPick, setLapPick, ref, refId: ref.id, lapMode, busy,
       sectors, sectorCuts, saveSectors,
-      // Призрак наследует имя своего заезда — в том числе вписанное вручную.
+      // Копия наследует имя своего заезда — в том числе вписанное вручную,
+      // и подписывается номером круга: иначе две колонки одного пилота не различить.
       name: (d) => {
-        if (!d.ghostOf) return own(d);
+        if (!d.ghostOf || d.lapOf == null) return own(d);
         const p = a.drivers.find(x => x.id === d.ghostOf);
-        return `${p ? own(p) : d.name} · лучший круг`;
+        const isBest = p && p.laps[p.bestIdx]?.index === d.lapOf;
+        return `${p ? own(p) : d.name} · круг #${d.lapOf}${isBest ? ' (лучший)' : ''}`;
       },
       color: (d) => driverColor(Math.max(0, idx(d))),
       V: (d) => (lapMode === 'best' ? d.bestV : d.medV),
@@ -397,7 +418,7 @@ export function App() {
       setExcl,
     };
   }, [a, refId, lapMode, names, excl, setExcl, busy, sectors, sectorCuts, saveSectors,
-      ghosts, toggleGhost]);
+      ghosts, toggleGhost, lapPick, setLapPick]);
 
   const ctx: ViewCtx | null = useMemo(
     () => (base ? { ...base, cursorS, setCursorS } : null),
