@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Analysis, DriverResult } from '../core/pipeline';
-import { driverColor, bestLapGhost, lapView } from '../core/pipeline';
+import { driverColor, buildComparison } from '../core/pipeline';
 import { lapTime, plural } from './format';
 import type { WorkerSource } from '../worker';
 import {
@@ -105,6 +105,10 @@ export interface ViewCtx {
   lapPick: Record<string, number>;
   /** привязать заезд к кругу; null — вернуть общий режим */
   setLapPick: (d: DriverResult, lapIndex: number | null) => void;
+  /** Каким участником сравнения представлен этот заезд: копией с выбранным
+   *  кругом, если круг выбран, иначе им самим. «Обзор» рисует настоящие заезды,
+   *  но карту трассы должен строить по тому, что реально сравнивается. */
+  view: (d: DriverResult) => DriverResult;
   ref: DriverResult;
   refId: string;
   lapMode: LapMode;
@@ -380,17 +384,7 @@ export function App() {
     const ref = a.drivers.find(d => d.id === refId) ?? a.drivers[0];
     refIdRef.current = ref.fingerprint;
     // В режиме «лучший круг» призрак совпал бы с оригиналом, поэтому там его нет.
-    const cmp = a.drivers.flatMap(d => {
-      // Явно выбранный круг сильнее общего режима: он и есть ответ на вопрос
-      // «сравни вот этот мой круг с вот тем его».
-      const pick = lapPick[d.id];
-      const base = pick != null ? lapView(d, pick) : d;
-      // В режиме «лучший круг» призрак совпал бы с оригиналом — там его нет.
-      const wantGhost = ghosts.includes(d.id) && (pick != null || lapMode !== 'best');
-      return wantGhost ? [base, bestLapGhost(d)] : [base];
-    });
-    // Цвет берётся по месту в списке сравнения, иначе призрак остался бы без цвета.
-    const idx = (d: DriverResult) => cmp.findIndex(x => x.id === d.id);
+    const { cmp, colorOf } = buildComparison(a.drivers, lapPick, ghosts, lapMode);
     const own = (d: DriverResult) => (names[d.id]?.trim() ? names[d.id].trim() : d.name);
     return {
       a, cmp, ghosts, toggleGhost, lapPick, setLapPick, ref, refId: ref.id, lapMode, busy,
@@ -403,7 +397,8 @@ export function App() {
         const isBest = p && p.laps[p.bestIdx]?.index === d.lapOf;
         return `${p ? own(p) : d.name} · круг #${d.lapOf}${isBest ? ' (лучший)' : ''}`;
       },
-      color: (d) => driverColor(Math.max(0, idx(d))),
+      color: colorOf,
+      view: (d) => cmp.find(x => x.id === d.id) ?? cmp.find(x => x.ghostOf === d.id) ?? d,
       V: (d) => (lapMode === 'best' ? d.bestV : d.medV),
       T: (d) => (lapMode === 'best' ? d.bestT : d.medT),
       LAT: (d) => (lapMode === 'best' ? d.bestLat : d.medLat),
@@ -453,7 +448,11 @@ export function App() {
                   className={`group flex items-center gap-2 shrink-0 pl-2 pr-1.5 py-1.5 rounded-lg border cursor-pointer transition
                     ${d.id === refId ? 'border-[var(--line)] bg-[var(--panel-2)]' : 'border-transparent hover:bg-[var(--panel)]'}`}
                 >
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: driverColor(i) }} />
+                  {/* Цвет берём из контекста, а не по индексу: при выбранном круге
+                      или включённом призраке порядок колонок сравнения отличается
+                      от порядка заездов, и шапка разошлась бы с карточками. */}
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ background: ctx ? ctx.color(d) : driverColor(a.drivers.indexOf(d)) }} />
                   <span className="flex flex-col leading-tight">
                     <span className="flex items-center gap-1">
                     <input

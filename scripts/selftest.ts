@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { gzipSync } from 'zlib';
-import { analyze, analyzeSessions, bestLapGhost, lapView } from '../src/core/pipeline';
+import { analyze, analyzeSessions, bestLapGhost, lapView, buildComparison } from '../src/core/pipeline';
 import { parseAimCsv } from '../src/core/parse';
 import { packSession, unpackSession } from '../src/core/pack';
 import { matchTracks, type TrackSignature } from '../src/core/trackid';
@@ -217,6 +217,30 @@ for (const d of a.drivers) {
   checks.push(['T6: распрямление не срабатывает на сбросе дуги в середине шпильки',
     t6 >= 0 && vals.every(v => v >= 25),
     vals.map(v => `${v.toFixed(0)} м`).join(', ')]);
+}
+
+// Цвета участников. Ошибка тут незаметна в тестах данных, но в интерфейсе
+// красит всех пилотов одинаково: настоящий заезд, подменённый копией с выбранным
+// кругом, отсутствует в списке сравнения, а «Обзор» спрашивает цвет именно у него.
+{
+  const d0 = a.drivers[0].id, d1 = a.drivers[1].id;
+  const lap0 = a.drivers[0].traces[8].lapIndex, lap1 = a.drivers[1].traces[3].lapIndex;
+  const cases: Array<[string, Record<string, number>, string[]]> = [
+    ['по умолчанию', {}, []],
+    ['оба привязаны к своим кругам', { [d0]: lap0, [d1]: lap1 }, []],
+    ['один привязан, у него же призрак', { [d0]: lap0 }, [d0]],
+    ['призрак без привязки', {}, [d0]],
+  ];
+  for (const [title, pick, ghosts] of cases) {
+    const { colorOf } = buildComparison(a.drivers, pick, ghosts, 'median');
+    const colors = a.drivers.map(colorOf);
+    checks.push([`цвета заездов различаются: ${title}`,
+      new Set(colors).size === a.drivers.length, colors.join(', ')]);
+  }
+  // Копия должна получить цвет своего заезда, а не чужой и не пустой.
+  const { cmp, colorOf } = buildComparison(a.drivers, { [d0]: lap0 }, [], 'median');
+  checks.push(['копия с выбранным кругом красится как её заезд',
+    colorOf(cmp[0]) === colorOf(a.drivers[0]), colorOf(cmp[0])]);
 }
 
 // Любой круг можно подставить как участника сравнения: зонные времена такой

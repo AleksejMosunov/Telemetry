@@ -59,8 +59,10 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
   };
 
   const mapValues = useMemo(
-    () => (mode === 'delta' ? deltaRate(T(deltaDriver), T(ref)) : V(ref)),
-    [mode, deltaDriver, ref, T, V],
+    () => (mode === 'delta'
+      ? deltaRate(T(ctx.view(deltaDriver)), T(ctx.view(ref)))
+      : V(ctx.view(ref))),
+    [mode, deltaDriver, ref, T, V, ctx],
   );
 
   const range = useMemo(() => {
@@ -73,7 +75,7 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
   const cornerLabel = useMemo(() => {
     if (mode === 'lines') return undefined;
     if (mode === 'speed') {
-      return (ci: number) => `${V(ref)[Math.round(a.corners[ci].sApex) % a.grid.length].toFixed(0)}`;
+      return (ci: number) => `${V(ctx.view(ref))[Math.round(a.corners[ci].sApex) % a.grid.length].toFixed(0)}`;
     }
     return (ci: number) => {
       const zi = a.zones.findIndex(z => z.corner.id === a.corners[ci].id);
@@ -83,9 +85,11 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
     };
   }, [mode, a, ref, V, ctx, deltaDriver]);
 
+  // Линии на карте — по списку сравнения: если выбран конкретный круг, на карте
+  // должна быть его траектория, а не усреднённая по всему заезду.
   const lines = useMemo(
-    () => a.drivers.map(d => ({ lat: ctx.LAT(d), color: color(d), width: d.id === ref.id ? 2.6 : 2 })),
-    [a, ctx, color, ref],
+    () => ctx.cmp.map(d => ({ lat: ctx.LAT(d), color: color(d), width: d.id === ref.id ? 2.6 : 2 })),
+    [ctx, color, ref],
   );
 
   const lapChart = useMemo(() => {
@@ -286,6 +290,12 @@ function DriverCard({ d, ctx }: { d: DriverResult; ctx: ViewCtx }) {
           })}
         </select>
       </label>
+      {lapPick[d.id] != null && (
+        <div className="text-[10px] text-[var(--muted-2)] leading-snug mt-1">
+          Цифры выше — по всему заезду и от выбора круга не зависят.
+          Круг #{lapPick[d.id]} участвует в карте трассы, «Поворотах», «Графиках» и «Повторе».
+        </div>
+      )}
 
       <button
         onClick={() => toggleGhost(d)}

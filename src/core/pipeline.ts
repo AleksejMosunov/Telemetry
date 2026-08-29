@@ -121,6 +121,42 @@ export function bestLapGhost(d: DriverResult): DriverResult {
   return best ? lapView(d, best.index) : d;
 }
 
+/**
+ * Список участников сравнения и цвета к нему.
+ *
+ * Собирается отдельно от видов, потому что тут легко ошибиться: настоящий заезд,
+ * подменённый копией с выбранным кругом, в списке отсутствует — но «Обзор»
+ * рисует именно настоящие заезды и спрашивает у них цвет. Если не связать копию
+ * с её оригиналом, все карточки получают один цвет.
+ */
+export function buildComparison(
+  drivers: DriverResult[],
+  lapPick: Record<string, number>,
+  ghosts: string[],
+  lapMode: 'median' | 'best',
+): { cmp: DriverResult[]; colorOf: (d: DriverResult) => string } {
+  const cmp = drivers.flatMap(d => {
+    // Явно выбранный круг сильнее общего режима.
+    const pick = lapPick[d.id];
+    const base = pick != null ? lapView(d, pick) : d;
+    // В режиме «лучший круг» призрак совпал бы с оригиналом — там его нет.
+    const wantGhost = ghosts.includes(d.id) && (pick != null || lapMode !== 'best');
+    return wantGhost ? [base, bestLapGhost(d)] : [base];
+  });
+
+  const byId = new Map<string, string>();
+  cmp.forEach((d, i) => {
+    const c = driverColor(i);
+    byId.set(d.id, c);
+    if (d.ghostOf && !byId.has(d.ghostOf)) byId.set(d.ghostOf, c);
+  });
+
+  return {
+    cmp,
+    colorOf: d => byId.get(d.id) ?? driverColor(Math.max(0, drivers.indexOf(d))),
+  };
+}
+
 export interface Analysis {
   track: { x: Float64Array; y: Float64Array; curv: Float64Array; length: number; step: number; n: number };
   /** отпечаток формы трассы — по нему заезд привязывается к конфигурации в базе */
