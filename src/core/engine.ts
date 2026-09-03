@@ -93,6 +93,10 @@ export interface PullReport {
   used: number;
   /** из них с низкой боковой нагрузкой */
   cleanUsed: number;
+  /** по каким участкам посчитан итог: только чистые или все померенные */
+  scope: 'clean' | 'all';
+  /** сколько участков вошло в итог */
+  scored: number;
 }
 
 /** Медиана — «карт и как его везли», лучшие разгоны — на что карт способен. */
@@ -325,9 +329,14 @@ export function buildPulls(
   });
 
   const good = rows.filter(r => r.gate && !r.skip);
+  // Итог считается по тем же участкам, что и вердикт. Иначе на одном экране
+  // оказываются две разные цифры: «тяга одинаковая» по чистым участкам и
+  // «+1.5 м» по всем — и непонятно, которой верить.
+  const cleanRows = good.filter(r => r.clean);
+  const scoredRows = cleanRows.length >= 2 ? cleanRows : good;
   const totals = drivers.map((d, k) => {
     let dist = 0, distBest = 0, varSum = 0, nMin = Infinity;
-    for (const r of good) {
+    for (const r of scoredRows) {
       const c = r.cells[k];
       dist += c.dist;
       distBest += c.distBest;
@@ -344,7 +353,9 @@ export function buildPulls(
   return {
     rows, totals,
     used: good.length,
-    cleanUsed: good.filter(r => r.clean).length,
+    cleanUsed: cleanRows.length,
+    scope: cleanRows.length >= 2 ? 'clean' : 'all',
+    scored: scoredRows.length,
   };
 }
 

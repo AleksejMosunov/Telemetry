@@ -129,11 +129,14 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                 <tbody>
                   {rep.rows.map(r => {
                     const off = !r.gate || !!r.skip;
+                    // Померенный, но не вошедший в итог участок остаётся в таблице:
+                    // спрятать его значило бы скрыть, что там разница есть.
+                    const counted = !off && (rep.scope === 'all' || r.clean);
                     return (
                       <tr key={r.section.id}
                         onMouseEnter={() => ctx.setCursorS(r.section.sStart)}
                         onMouseLeave={() => ctx.setCursorS(null)}
-                        className={`border-t border-[var(--line-soft)] ${off ? 'text-[var(--muted-2)]' : ''}`}>
+                        className={`border-t border-[var(--line-soft)] ${off ? 'text-[var(--muted-2)]' : counted ? '' : 'opacity-60'}`}>
                         <td className="px-4 py-2 sticky left-0 bg-inherit whitespace-nowrap">
                           {r.section.label}
                         </td>
@@ -193,8 +196,13 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                     <td className="px-4 py-2.5 sticky left-0 bg-[var(--panel)]">
                       всего
                       <span className="text-[var(--muted-2)] ml-2 text-[10px] font-normal">
-                        по {rep.used} {rep.used === 1 ? 'участку' : 'участкам'}
-                        {rep.cleanUsed > 0 && rep.cleanUsed < rep.used && `, из них ${rep.cleanUsed} без нагрузки`}
+                        по {rep.scored} {rep.scored === 1 ? 'участку' : 'участкам'}
+                        {rep.scope === 'clean'
+                          ? ' без нагрузки'
+                          : rep.used > rep.scored ? '' : ''}
+                        {rep.scope === 'all' && rep.used > 1 && ' — чистых не нашлось, считаем по всем'}
+                        {rep.scope === 'clean' && rep.used > rep.scored
+                          && `; ${rep.used - rep.scored} в дуге не в счёт`}
                       </span>
                     </td>
                     <td /><td /><td />

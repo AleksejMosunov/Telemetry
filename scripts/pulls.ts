@@ -30,7 +30,7 @@ for (const r of rep.rows) {
 }
 
 console.log('\n(b = лучший разгон p20, n = кругов уложилось/всего, нагрузка = мин/макс по участникам, * = участок не судит мотор)');
-console.log('\nИТОГО по пригодным участкам');
+console.log(`\nИТОГО по ${rep.scored} участкам (${rep.scope === 'clean' ? 'только без нагрузки' : 'по всем — чистых не нашлось'})`);
 for (const t of rep.totals) {
   const d = a.drivers.find(x => x.id === t.driverId)!;
   const r0 = rep.totals[0];
