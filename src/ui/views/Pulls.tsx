@@ -17,8 +17,8 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
     [a, cmp],
   );
   const floor = useMemo(
-    () => noiseFloor(ref, a.corners, a.grid, a.track.length),
-    [a, ref],
+    () => noiseFloor(ref, a.corners, a.grid, a.track.length, mode),
+    [a, ref, mode],
   );
 
   const D = (c: PullCell) => (mode === 'best' ? c.distBest : c.dist);
@@ -37,7 +37,7 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
       <div className="panel p-4">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <div className="text-[13px] font-medium">Разгон на прямых</div>
+            <div className="text-[13px] font-medium">Разгон</div>
             <div className="text-[11px] text-[var(--muted)] max-w-[640px] leading-relaxed mt-0.5">
               Сколько метров уходит на разгон между двумя скоростями. Скорости фиксированы, поэтому
               разница в выходе из поворота на результат не влияет — сравнивается тяга карта, а не работа
@@ -80,6 +80,9 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                   <span className="text-[var(--muted)]"> дистанции разгона</span>
                 </div>
                 <div className="text-[11px] text-[var(--muted)] mt-0.5 leading-relaxed">{v.text}</div>
+                {v.note && (
+                  <div className="text-[11px] text-[var(--warn,var(--muted))] mt-1 leading-relaxed">{v.note}</div>
+                )}
                 {isFinite(floor) && (
                   <div className="text-[11px] text-[var(--muted-2)] mt-1 leading-relaxed">
                     Шумовой пол метода — <span className="num">{floor.toFixed(1)}%</span>: настолько
@@ -98,10 +101,13 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
               <table className="w-full text-[12px] num border-collapse">
                 <thead>
                   <tr className="text-[var(--muted)] text-[11px]">
-                    <th className="text-left font-normal px-4 py-2 sticky left-0 bg-[var(--panel)]">прямая</th>
+                    <th className="text-left font-normal px-4 py-2 sticky left-0 bg-[var(--panel)]">участок</th>
                     <th className="text-right font-normal px-3 py-2">длина</th>
                     <th className="text-right font-normal px-3 py-2" title="Диапазон скоростей, в котором меряется разгон. Считается из данных: снизу — самая высокая скорость выхода среди сравниваемых, сверху — самая низкая пиковая. Всё, что за его пределами, проезжают не все.">
                       ворота
+                    </th>
+                    <th className="text-right font-normal px-3 py-2" title="Боковая нагрузка на разгоне, посчитанная из радиуса траектории и скорости. Низкая — карт едет почти прямо, и разгон ограничен мотором. Высокая — карт ещё в дуге, и в дистанцию входит траектория и сцепление шин, а не только тяга.">
+                      нагрузка
                     </th>
                     {cmp.map(d => (
                       <th key={d.id} className="text-right font-normal px-3 py-2 min-w-[120px] align-bottom">
@@ -124,19 +130,26 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                   {rep.rows.map(r => {
                     const off = !r.gate || !!r.skip;
                     return (
-                      <tr key={r.straight.id}
-                        onMouseEnter={() => ctx.setCursorS(r.straight.sStart)}
+                      <tr key={r.section.id}
+                        onMouseEnter={() => ctx.setCursorS(r.section.sStart)}
                         onMouseLeave={() => ctx.setCursorS(null)}
                         className={`border-t border-[var(--line-soft)] ${off ? 'text-[var(--muted-2)]' : ''}`}>
                         <td className="px-4 py-2 sticky left-0 bg-inherit whitespace-nowrap">
-                          {r.straight.label}
+                          {r.section.label}
                         </td>
                         <td className="px-3 py-2 text-right text-[var(--muted)]">
-                          {r.straight.length.toFixed(0)}
+                          {r.section.length.toFixed(0)}
                         </td>
                         <td className="px-3 py-2 text-right whitespace-nowrap">
                           {r.gate
                             ? <span className="text-[var(--muted)]">{r.gate.vLo}→{r.gate.vHi} км/ч</span>
+                            : <span className="text-[var(--muted-2)]">—</span>}
+                        </td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          {isFinite(r.latG)
+                            ? <span className={r.clean ? 'text-[var(--muted)]' : 'text-[var(--muted-2)]'}>
+                                {r.latG.toFixed(2)} g{!r.clean && <span className="ml-1 text-[10px]">в дуге</span>}
+                              </span>
                             : <span className="text-[var(--muted-2)]">—</span>}
                         </td>
                         {off ? (
@@ -168,10 +181,11 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                     <td className="px-4 py-2.5 sticky left-0 bg-[var(--panel)]">
                       всего
                       <span className="text-[var(--muted-2)] ml-2 text-[10px] font-normal">
-                        по {rep.used} {rep.used === 1 ? 'прямой' : 'прямым'}
+                        по {rep.used} {rep.used === 1 ? 'участку' : 'участкам'}
+                        {rep.cleanUsed > 0 && rep.cleanUsed < rep.used && `, из них ${rep.cleanUsed} без нагрузки`}
                       </span>
                     </td>
-                    <td /><td />
+                    <td /><td /><td />
                     {cmp.map((d, k) => {
                       const dd = total(k) - total(refK);
                       return (
@@ -190,9 +204,11 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
               </table>
             </div>
             <div className="px-4 py-3 text-[11px] text-[var(--muted-2)] leading-relaxed border-t border-[var(--line-soft)] max-w-[760px]">
-              Короткие прямые и прямые без общего диапазона скоростей в зачёт не идут: там мерить нечего.
-              Из телеметрии видно тягу на массу, а не мощность — разницу между слабым мотором и пилотом
-              на десять килограммов тяжелее по этим данным не различить.
+              Участок разгона — от низшей точки скорости в повороте до пика перед следующим торможением.
+              Участки без общего диапазона скоростей в зачёт не идут: там мерить нечего. Про мотор судят
+              участки с низкой боковой нагрузкой; там, где карт ещё в дуге, в дистанцию входит и
+              траектория. Из телеметрии видно тягу на массу, а не мощность — разницу между слабым мотором
+              и пилотом на десять килограммов тяжелее по этим данным не различить.
             </div>
           </div>
         </>

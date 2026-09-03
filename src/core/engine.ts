@@ -1,5 +1,5 @@
 /**
- * Разгон на прямых — оценка тяги карта отдельно от пилота.
+ * Разгон — оценка тяги карта отдельно от пилота.
  *
  * Наивная метрика «сколько км/ч набрал за N метров от точки распрямления» не
  * работает: тяга падает с ростом скорости (a ≈ P/(m·v) − сопротивление), поэтому
@@ -10,20 +10,34 @@
  * ушло на разгон с 42 до 66 км/ч» — начало отсчёта у всех одинаковое по скорости,
  * и разница в выходе из поворота на результат не влияет.
  *
- * Пороги не заданы числом, а выводятся из самих данных по каждой прямой: карт на
- * 437 м может нигде не доехать до 60 км/ч, а на длинной трассе 60 будет уже
- * далеко в разгоне. Побочный эффект полезен: медленная прямая меряет низы мотора,
- * длинная — верхи, и по тому, где именно отстаёт карт, различаются причины.
+ * Пороги не заданы числом, а выводятся из самих данных по каждому участку: карт
+ * на 437 м может нигде не доехать до 60 км/ч, а на длинной трассе 60 будет уже
+ * далеко в разгоне. Побочный эффект полезен: медленный участок меряет низы
+ * мотора, быстрый — верхи, и по тому, где именно отстаёт карт, различаются
+ * причины.
  */
 
 import type { Corner } from './track';
 import type { DriverResult } from './pipeline';
 
-export interface Straight {
+/**
+ * Участок разгона: от апекса поворота до входа в следующий.
+ *
+ * Раньше здесь была геометрическая прямая — промежуток между концом одного
+ * поворота и началом следующего. На картодроме с плотными поворотами таких
+ * промежутков просто нет: девять «прямых» по три метра, мерить негде. Разгон же
+ * есть всегда — от низшей точки скорости до пика перед следующим торможением.
+ *
+ * Плата за это — участок захватывает выход из поворота, где тягу ограничивает не
+ * мотор, а сцепление шин. Поэтому у каждого участка считается боковая нагрузка:
+ * по ней видно, какие из них честно меряют мотор, а какие мешают его с
+ * траекторией. Прятать это нельзя — иначе цифра выглядит убедительнее, чем есть.
+ */
+export interface Section {
   id: number;
-  label: string;       // «T3 → T4»
-  sStart: number;      // конец предыдущего поворота, м от старт/финиша
-  sEnd: number;        // начало следующего
+  label: string;       // «T9 → T1»
+  sStart: number;      // апекс поворота, м от старт/финиша
+  sEnd: number;        // начало следующего поворота
   length: number;      // м
 }
 
@@ -33,6 +47,7 @@ export interface PullLap {
   lapIndex: number;
   dist: number;        // м между воротами
   time: number;        // с между воротами
+  latG: number;        // средняя боковая нагрузка на разгоне, g (NaN — нет гироскопа)
 }
 
 export interface PullCell {
@@ -40,39 +55,57 @@ export interface PullCell {
   /** медиана дистанции разгона по кругам, м (NaN — ни один круг не прошёл ворота) */
   dist: number;
   time: number;
-  /** лучшие разгоны, p10 по кругам, м. Медиана мерит «карт и как его везли»,
+  /** лучшие разгоны, p20 по кругам, м. Медиана мерит «карт и как его везли»,
    *  лучшие — что карт может, когда пилот в полном газу с самого выхода.
    *  Разрыв, который держится и там и там, объясняется картом, а не манерой. */
   distBest: number;
   timeBest: number;
+  latG: number;
   /** оценка погрешности медианы, м — по ней видно, значима ли разница */
   se: number;
+  /** сколько кругов уложилось в ворота */
   n: number;
+  /** сколько кругов было всего: если уложилась половина, доверия к цифре меньше */
+  nTotal: number;
   laps: PullLap[];
 }
 
 export interface PullRow {
-  straight: Straight;
-  /** null — общего диапазона скоростей на этой прямой нет */
+  section: Section;
+  /** null — общего диапазона скоростей на этом участке нет */
   gate: Gate | null;
-  /** почему прямая не годится */
+  /** почему участок не годится */
   skip?: string;
+  /** боковая нагрузка на разгоне, g — медиана по участникам */
+  latG: number;
+  /** нагрузка низкая: участок меряет мотор, а не сцепление и траекторию */
+  clean: boolean;
   cells: PullCell[];
 }
 
 export interface PullReport {
   rows: PullRow[];
-  /** сумма дистанций разгона по всем пригодным прямым */
+  /** сумма дистанций разгона по всем пригодным участкам */
   totals: { driverId: string; dist: number; distBest: number; se: number; n: number }[];
-  /** сколько прямых удалось померить */
+  /** сколько участков удалось померить */
   used: number;
+  /** из них с низкой боковой нагрузкой */
+  cleanUsed: number;
 }
+
+/** Медиана — «карт и как его везли», лучшие разгоны — на что карт способен. */
+export type PullMode = 'median' | 'best';
 
 /** Минимальная ширина ворот. Уже 5 км/ч — и шум GPS-скорости съедает измерение. */
 const MIN_SPAN = 5;
 
 /** Запас от краёв диапазона: у самых границ пересечение ловится на шуме. */
 const MARGIN = 1;
+
+/** Боковая нагрузка, ниже которой карт едет достаточно прямо, чтобы разгон
+ *  ограничивался мотором, а не сцеплением шин. 0.35 g — примерно четверть
+ *  того, что карт держит в повороте. */
+const CLEAN_G = 0.35;
 
 const ringLen = (a: number, b: number, n: number) => ((b - a) % n + n) % n;
 
@@ -98,18 +131,18 @@ function mad(a: number[]): number {
   return 1.4826 * med(a.map(v => Math.abs(v - m)));
 }
 
-/** Прямые — промежутки между поворотами. Свойство трассы, как и сами повороты. */
-export function buildStraights(corners: Corner[], length: number): Straight[] {
+/** Участки разгона: апекс каждого поворота -> вход в следующий. */
+export function buildSections(corners: Corner[], length: number): Section[] {
   const n = corners.length;
   if (n < 2) return [];
   return corners.map((c, i) => {
     const next = corners[(i + 1) % n];
-    let len = next.sStart - c.sEnd;
+    let len = next.sStart - c.sApex;
     if (len < 0) len += length;
     return {
       id: i + 1,
       label: `${c.name} → ${next.name}`,
-      sStart: c.sEnd, sEnd: next.sStart, length: len,
+      sStart: c.sApex, sEnd: next.sStart, length: len,
     };
   });
 }
@@ -121,17 +154,24 @@ const idxOf = (grid: Float64Array, s: number) => {
 };
 
 /**
- * Первое пересечение скоростью порога, в дробных шагах сетки от начала окна.
+ * Первое пересечение скоростью порога СНИЗУ ВВЕРХ, в дробных шагах сетки.
+ *
  * Дробная часть нужна: сетка в 1 м, а вся разница между картами — единицы метров,
  * округление до целого шага съело бы её заметную часть.
+ *
+ * Если скорость уже выше порога в начале поиска, пересечения нет и круг в замер
+ * не идёт. Возвращать здесь начало окна нельзя: разгон тогда меряется не от
+ * ворот, а от произвольной точки, и дистанция выходит фальшиво короткой. Именно
+ * такие круги первыми попадают в «лучшие разгоны» и раздувают разницу на
+ * десятки процентов там, где карт один и тот же.
  */
-function crossAt(
+function crossUp(
   v: Float64Array, i0: number, from: number, len: number, target: number, n: number,
 ): number {
-  for (let d = from; d <= len; d++) {
+  if (v[(i0 + from) % n] >= target) return NaN;
+  for (let d = from + 1; d <= len; d++) {
     const i = (i0 + d) % n;
     if (v[i] < target) continue;
-    if (d === from) return d;                       // уже выше порога на старте окна
     const prev = v[(i0 + d - 1) % n];
     const span = v[i] - prev;
     return span > 0 ? d - 1 + (target - prev) / span : d;
@@ -149,8 +189,18 @@ function timeAt(t: Float64Array, i0: number, d: number, n: number, tFull: number
   return a + (b - a) * (d - f);
 }
 
+/** Низшая точка скорости внутри окна — от неё начинается разгон. */
+function argMin(v: Float64Array, i0: number, len: number, n: number): number {
+  let best = Infinity, at = 0;
+  for (let d = 0; d <= len; d++) {
+    const x = v[(i0 + d) % n];
+    if (x < best) { best = x; at = d; }
+  }
+  return at;
+}
+
 /**
- * Разгонные ворота по всем прямым.
+ * Разгонные ворота по всем участкам.
  *
  * @param drivers участники сравнения — те же, что в таблицах: заезд целиком или
  *   копия, привязанная к одному кругу. Ворота считаются по всем сразу, иначе
@@ -162,60 +212,69 @@ export function buildPulls(
   grid: Float64Array,
   trackLength: number,
 ): PullReport {
-  const straights = buildStraights(corners, trackLength);
+  const sections = buildSections(corners, trackLength);
   const n = grid.length;
   const step = grid[1] - grid[0];
 
-  const rows: PullRow[] = straights.map(st => {
-    const iA = idxOf(grid, st.sStart), iB = idxOf(grid, st.sEnd);
+  const rows: PullRow[] = sections.map(sec => {
+    const iA = idxOf(grid, sec.sStart), iB = idxOf(grid, sec.sEnd);
     const len = ringLen(iA, iB, n);
-    if (len < 10) {
-      return { straight: st, gate: null, skip: 'слишком короткая', cells: [] };
-    }
+    const none = (skip: string): PullRow =>
+      ({ section: sec, gate: null, skip, latG: NaN, clean: false, cells: [] });
+    if (len < 8) return none('слишком короткий');
 
-    // Диапазон, который реально проезжают все: снизу — самая высокая скорость
-    // выхода, сверху — самая низкая пиковая. Ниже нижней границы кто-то уже едет
-    // быстрее и разгон не с чего начинать, выше верхней кто-то просто не доезжает.
+    // Диапазон, который реально проезжают все: снизу — самая высокая низшая точка
+    // скорости, сверху — самая низкая пиковая. Ниже нижней границы кто-то уже
+    // едет быстрее и разгон не с чего начинать, выше верхней кто-то не доезжает.
     let vLo = -Infinity, vHi = Infinity;
     let enough = true;
     for (const d of drivers) {
-      const starts: number[] = [], peaks: number[] = [];
+      const mins: number[] = [], peaks: number[] = [];
       for (const tr of d.traces) {
-        starts.push(tr.v[iA]);
+        const dMin = argMin(tr.v, iA, len, n);
+        mins.push(tr.v[(iA + dMin) % n]);
         let p = -Infinity;
-        for (let k = 0; k <= len; k++) p = Math.max(p, tr.v[(iA + k) % n]);
+        for (let k = dMin; k <= len; k++) p = Math.max(p, tr.v[(iA + k) % n]);
         peaks.push(p);
       }
-      if (!starts.length) { enough = false; break; }
-      // Не min/max, а квантили: один круг с ранним газом или с трафиком не должен
-      // в одиночку решать, годится ли прямая для всех остальных.
-      vLo = Math.max(vLo, quantile(starts, 0.9));
+      if (!mins.length) { enough = false; break; }
+      // Нижняя граница — почти максимум минимумов: круги, где карт вообще не
+      // опустился до ворот, из замера выпадают, и брать медиану значило бы
+      // потерять половину. Верхняя — наоборот, почти минимум пиков.
+      vLo = Math.max(vLo, quantile(mins, 0.95));
       vHi = Math.min(vHi, quantile(peaks, 0.1));
     }
-    if (!enough) return { straight: st, gate: null, skip: 'нет кругов', cells: [] };
+    if (!enough) return none('нет кругов');
 
     const gLo = Math.ceil(vLo) + MARGIN;
     const gHi = Math.floor(vHi) - MARGIN;
-    if (gHi - gLo < MIN_SPAN) {
-      return {
-        straight: st, gate: null, cells: [],
-        skip: `общий диапазон всего ${Math.max(0, gHi - gLo)} км/ч`,
-      };
-    }
+    if (gHi - gLo < MIN_SPAN) return none(`общий диапазон всего ${Math.max(0, gHi - gLo)} км/ч`);
     const gate: Gate = { vLo: gLo, vHi: gHi };
 
     const cells: PullCell[] = drivers.map(d => {
       const laps: PullLap[] = [];
       for (const tr of d.traces) {
         const tFull = tr.t[n - 1] + (tr.t[n - 1] - tr.t[n - 2]);
-        const dLo = crossAt(tr.v, iA, 0, len, gate.vLo, n);
+        const dMin = argMin(tr.v, iA, len, n);
+        const dLo = crossUp(tr.v, iA, dMin, len, gate.vLo, n);
         if (!isFinite(dLo)) continue;
-        const dHi = crossAt(tr.v, iA, Math.ceil(dLo), len, gate.vHi, n);
+        const dHi = crossUp(tr.v, iA, Math.ceil(dLo), len, gate.vHi, n);
         if (!isFinite(dHi) || dHi <= dLo) continue;
+        // Боковая нагрузка из кривизны траектории: a = v²·κ. Угол руля из
+        // телеметрии не восстановить, а вот радиус, который карт пишет, меряется
+        // точно — и вместе со скоростью даёт перегрузку без акселерометра.
+        let gSum = 0, gCnt = 0;
+        for (let k = Math.ceil(dLo); k <= Math.floor(dHi); k++) {
+          const i = (iA + k) % n;
+          if (!isFinite(tr.kap[i])) continue;
+          gSum += ((tr.v[i] / 3.6) ** 2 * Math.abs(tr.kap[i])) / 9.81;
+          gCnt++;
+        }
         laps.push({
           lapIndex: tr.lapIndex,
           dist: (dHi - dLo) * step,
           time: timeAt(tr.t, iA, dHi, n, tFull) - timeAt(tr.t, iA, dLo, n, tFull),
+          latG: gCnt ? gSum / gCnt : NaN,
         });
       }
       const ds = laps.map(l => l.dist);
@@ -223,20 +282,31 @@ export function buildPulls(
       return {
         driverId: d.id,
         dist: med(ds), time: med(laps.map(l => l.time)),
-        distBest: quantile(ds, 0.1), timeBest: quantile(laps.map(l => l.time), 0.1),
+        // p20, а не p10: край распределения из двух-трёх десятков кругов сам по
+        // себе шумный, и чем ближе к краю, тем больше в оценку попадает удачного
+        // стечения обстоятельств вместо возможностей карта.
+        distBest: quantile(ds, 0.2), timeBest: quantile(laps.map(l => l.time), 0.2),
+        latG: med(laps.map(l => l.latG).filter(isFinite)),
         // Погрешность медианы, а не разброс по кругам: сравниваются именно медианы.
         se: laps.length > 1 ? (sd * 1.25) / Math.sqrt(laps.length) : NaN,
-        n: laps.length,
+        n: laps.length, nTotal: d.traces.length,
         laps,
       };
     });
 
-    // Прямая идёт в зачёт только если померилась у всех: иначе сумма по колонкам
-    // складывалась бы из разного набора прямых.
+    const latG = med(cells.map(c => c.latG).filter(isFinite));
+    const clean = isFinite(latG) && latG < CLEAN_G;
+
+    // Участок идёт в зачёт только если померился у всех: иначе сумма по колонкам
+    // складывалась бы из разного набора участков.
     if (cells.some(c => !isFinite(c.dist))) {
-      return { straight: st, gate, cells, skip: 'разгон уложился не у всех' };
+      return { section: sec, gate, latG, clean, cells, skip: 'разгон уложился не у всех' };
     }
-    return { straight: st, gate, cells };
+    // Половина кругов, выпавшая из ворот, — это уже не выборка, а остаток.
+    if (cells.some(c => c.n < Math.max(2, c.nTotal / 2))) {
+      return { section: sec, gate, latG, clean, cells, skip: 'в ворота уложилось мало кругов' };
+    }
+    return { section: sec, gate, latG, clean, cells };
   });
 
   const good = rows.filter(r => r.gate && !r.skip);
@@ -256,51 +326,61 @@ export function buildPulls(
     };
   });
 
-  return { rows, totals, used: good.length };
+  return {
+    rows, totals,
+    used: good.length,
+    cleanUsed: good.filter(r => r.clean).length,
+  };
 }
-
-/** Медиана — «карт и как его везли», лучшие разгоны — на что карт способен. */
-export type PullMode = 'median' | 'best';
 
 export type VerdictKind = 'none' | 'top' | 'bottom' | 'all' | 'mixed';
 
 export interface Verdict {
   kind: VerdictKind;
-  /** отставание в % дистанции разгона, усреднённое по прямым */
+  /** отставание в % дистанции разгона, усреднённое по участкам */
   pct: number;
   text: string;
+  /** оговорка о качестве участков, если она нужна */
+  note?: string;
 }
 
 /**
  * Что означает форма отставания.
  *
  * Одно число «медленнее на 6%» не отвечает на вопрос, из-за чего. А вот
- * распределение по диапазонам скоростей отвечает: прямые делятся пополам по
+ * распределение по диапазонам скоростей отвечает: участки делятся пополам по
  * середине их ворот, и сравнивается отставание на медленных и быстрых.
  */
 export function verdict(
   rep: PullReport, refId: string, driverId: string, mode: PullMode = 'median',
 ): Verdict {
   const D = (c: PullCell) => (mode === 'best' ? c.distBest : c.dist);
-  const pts = rep.rows
+  const all = rep.rows
     .filter(r => r.gate && !r.skip)
     .map(r => {
       const a = r.cells.find(c => c.driverId === driverId)!;
       const b = r.cells.find(c => c.driverId === refId)!;
       return {
         mid: (r.gate!.vLo + r.gate!.vHi) / 2,
+        clean: r.clean,
         rel: (D(a) - D(b)) / D(b),
         // Значимой считаем разницу, которая крупнее суммарной погрешности медиан.
         sig: Math.abs(D(a) - D(b)) > (isFinite(a.se) ? a.se : 0) + (isFinite(b.se) ? b.se : 0),
       };
     });
-  if (!pts.length) return { kind: 'none', pct: NaN, text: 'Нет прямых с общим диапазоном скоростей' };
+  if (!all.length) return { kind: 'none', pct: NaN, text: 'Нет участков с общим диапазоном скоростей' };
+
+  // Про мотор судим по участкам с низкой боковой нагрузкой. Если таких нет,
+  // считаем по всем, но говорим, что в цифру вошла и работа в повороте.
+  const clean = all.filter(p => p.clean);
+  const pts = clean.length >= 2 ? clean : all;
+  const note = clean.length >= 2 ? undefined
+    : 'На этой трассе карт нигде не едет прямо достаточно долго: в разгон входит выход из поворота, '
+      + 'поэтому в цифру попадает и траектория, а не только тяга.';
 
   const pct = 100 * pts.reduce((s, p) => s + p.rel, 0) / pts.length;
   const sig = pts.filter(p => p.sig);
-  if (!sig.length) {
-    return { kind: 'none', pct, text: 'Разница в пределах разброса по кругам — тяга одинаковая' };
-  }
+  if (!sig.length) return { kind: 'none', pct, text: 'Разница в пределах разброса по кругам — тяга одинаковая', note };
 
   const mids = pts.map(p => p.mid).sort((x, y) => x - y);
   const cut = mids[mids.length >> 1];
@@ -309,13 +389,12 @@ export function verdict(
     && g.reduce((s, p) => s + p.rel, 0) / g.length > 0.01;
   const lo = slow(low), hi = slow(high);
 
-  if (pct < 0) return { kind: 'mixed', pct, text: 'Разгоняется быстрее опорного' };
-  if (lo && hi) return { kind: 'all', pct, text: 'Отстаёт во всём диапазоне — похоже на массу или сопротивление качению (ось, подшипники, тормоза), а не на мотор' };
-  if (hi) return { kind: 'top', pct, text: 'Отстаёт только на быстрых прямых — верх мотора' };
-  if (lo) return { kind: 'bottom', pct, text: 'Отстаёт только на медленных прямых — низы: карбюратор, сцепление, передатка' };
-  return { kind: 'mixed', pct, text: 'Отставание разбросано по прямым без общей картины' };
+  if (pct < 0) return { kind: 'mixed', pct, text: 'Разгоняется быстрее опорного', note };
+  if (lo && hi) return { kind: 'all', pct, text: 'Отстаёт во всём диапазоне — похоже на массу или сопротивление качению (ось, подшипники, тормоза), а не на мотор', note };
+  if (hi) return { kind: 'top', pct, text: 'Отстаёт только на быстрых участках — верх мотора', note };
+  if (lo) return { kind: 'bottom', pct, text: 'Отстаёт только на медленных участках — низы: карбюратор, сцепление, передатка', note };
+  return { kind: 'mixed', pct, text: 'Отставание разбросано по участкам без общей картины', note };
 }
-
 
 /**
  * Шумовой пол: делим круги пилота пополам и меряем ту же метрику между
@@ -327,6 +406,7 @@ export function verdict(
  */
 export function noiseFloor(
   d: DriverResult, corners: Corner[], grid: Float64Array, trackLength: number,
+  mode: PullMode = 'median',
 ): number {
   if (d.traces.length < 8) return NaN;
   const half = d.traces.length >> 1;
@@ -336,6 +416,9 @@ export function noiseFloor(
     corners, grid, trackLength,
   );
   const [a, b] = rep.totals;
-  if (!rep.used || !a?.dist || !b?.dist) return NaN;
-  return Math.abs(100 * (b.dist - a.dist) / a.dist);
+  if (!rep.used || !a || !b) return NaN;
+  const x = mode === 'best' ? a.distBest : a.dist;
+  const y = mode === 'best' ? b.distBest : b.dist;
+  if (!x || !y) return NaN;
+  return Math.abs(100 * (y - x) / x);
 }
