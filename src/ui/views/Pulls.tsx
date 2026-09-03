@@ -27,9 +27,24 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
   const refK = Math.max(0, cmp.findIndex(d => d.id === ref.id));
   const total = (k: number) => (mode === 'best' ? rep.totals[k]?.distBest : rep.totals[k]?.dist) ?? NaN;
 
+  // Проценты дистанции сами по себе ни о чём не говорят: пилот думает секундами
+  // за круг. Потери на зачётных разгонах, сложенные вместе, сразу показывают,
+  // какую часть отставания объясняет тяга, а какая осталась на повороты.
+  const scoredRows = rep.rows.filter(r => r.gate && !r.skip && (rep.scope === 'all' || r.clean));
+  const lossOf = (d: typeof cmp[0]) => {
+    const k = cmp.indexOf(d);
+    let dt = 0;
+    for (const r of scoredRows) {
+      const t = mode === 'best' ? r.cells[k].timeBest : r.cells[k].time;
+      const tr = mode === 'best' ? r.cells[refK].timeBest : r.cells[refK].time;
+      if (isFinite(t) && isFinite(tr)) dt += t - tr;
+    }
+    return dt;
+  };
+
   const verdicts = cmp
     .filter(d => d.id !== ref.id)
-    .map(d => ({ d, v: verdict(rep, ref.id, d.id, mode) }));
+    .map(d => ({ d, v: verdict(rep, ref.id, d.id, mode), dt: lossOf(d) }));
 
   return (
     <div className="flex flex-col gap-3">
@@ -67,7 +82,7 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
         </div>
       ) : (
         <>
-          {verdicts.map(({ d, v }) => (
+          {verdicts.map(({ d, v, dt }) => (
             <div key={d.id} className="panel p-4 flex items-start gap-3">
               <span className="w-2 h-2 rounded-full mt-1.5 shrink-0" style={{ background: color(d) }} />
               <div className="min-w-0">
@@ -80,6 +95,20 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                   <span className="text-[var(--muted)]"> дистанции разгона</span>
                 </div>
                 <div className="text-[11px] text-[var(--muted)] mt-0.5 leading-relaxed">{v.text}</div>
+                {isFinite(dt) && Math.abs(dt) > 0.001 && (
+                  <div className="text-[11px] text-[var(--muted)] mt-1 leading-relaxed">
+                    В секундах это <span className="num">{dt > 0 ? '+' : '−'}{Math.abs(dt).toFixed(3)} с</span> за
+                    круг на зачётных разгонах
+                    {(() => {
+                      const lap = d.stats.median - ref.stats.median;
+                      if (!isFinite(lap) || Math.abs(lap) < 0.02) return '.';
+                      const share = Math.round(100 * dt / lap);
+                      return share > 0 && share <= 130
+                        ? ` — это ${share}% всей разницы кругов (${lap > 0 ? '+' : '−'}${Math.abs(lap).toFixed(3)} с).`
+                        : `, при разнице кругов ${lap > 0 ? '+' : '−'}${Math.abs(lap).toFixed(3)} с.`;
+                    })()}
+                  </div>
+                )}
                 {v.note && (
                   <div className="text-[11px] text-[var(--warn,var(--muted))] mt-1 leading-relaxed">{v.note}</div>
                 )}
