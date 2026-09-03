@@ -474,7 +474,7 @@ export interface Verdict {
   /** Отставание по каждым воротам, от медленных к быстрым. Вывод про мотор
    *  держится не на величине, а на этом ряде: интерфейс обязан показать сам ряд,
    *  иначе пилоту приходится добывать его из таблицы вручную. */
-  points: { mid: number; rel: number; err: number; label: string }[];
+  points: { mid: number; rel: number; err: number; label: string; gate: string }[];
 }
 
 /**
@@ -495,6 +495,9 @@ export function verdict(
       const b = r.cells.find(c => c.driverId === refId)!;
       return {
         mid: (r.gate!.vLo + r.gate!.vHi) / 2,
+        // Подпись — сам диапазон, а не его середина: «54 км/ч» читается как
+        // «разогнался до 54», хотя это разгон с 49 до 59.
+        gate: `${r.gate!.vLo}→${r.gate!.vHi}`,
         label: r.section.label,
         clean: r.clean,
         latG: r.latG, latSpread: r.latSpread,
@@ -539,7 +542,7 @@ export function verdict(
 
   const pct = 100 * pts.reduce((s, p) => s + p.rel, 0) / pts.length;
   const points = [...pts].sort((x, y) => x.mid - y.mid)
-    .map(p => ({ mid: p.mid, rel: 100 * p.rel, err: 100 * p.err, label: p.label }));
+    .map(p => ({ mid: p.mid, rel: 100 * p.rel, err: 100 * p.err, label: p.label, gate: p.gate }));
   const base = { pct, points, note };
 
   const sig = pts.filter(p => p.sig);
@@ -576,7 +579,7 @@ export function verdict(
   const a = points[0], b = points[points.length - 1];
   const change = b.rel - a.rel;
   const err = quadSum(a.err, b.err);
-  const pair = `${a.rel.toFixed(1)}% на ${a.mid.toFixed(0)} км/ч и ${b.rel.toFixed(1)}% на ${b.mid.toFixed(0)} км/ч`;
+  const pair = `${a.rel.toFixed(1)}% на разгоне ${a.gate} км/ч и ${b.rel.toFixed(1)}% на ${b.gate}`;
 
   // Тест на форму работает только там, где мотор и масса расходятся заметнее
   // погрешности. На узком диапазоне скоростей они неразличимы, и назвать
@@ -587,7 +590,7 @@ export function verdict(
       ...base, kind: 'weak',
       title: 'Карт медленнее, но причину не определить',
       why: `Отставание почти одинаковое на всех воротах — ${pair}. Само по себе это ещё ничего не значит: `
-        + `все ворота лежат в узком диапазоне ${a.mid.toFixed(0)}–${b.mid.toFixed(0)} км/ч. Слабый мотор `
+        + `все замеры лежат в узком диапазоне ${a.mid.toFixed(0)}–${b.mid.toFixed(0)} км/ч. Слабый мотор `
         + `на таком отрезке дал бы рост всего на ${Math.abs(rise).toFixed(1)}%, а погрешность замера `
         + `±${err.toFixed(1)}% — он в ней просто утонет. Отличить слабый мотор от лишней массы тут нечем.`,
       action: 'Нужен заезд там, где карт разгоняется в широком диапазоне — от медленного поворота до '

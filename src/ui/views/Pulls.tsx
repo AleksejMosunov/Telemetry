@@ -123,7 +123,7 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                             <span key={p.label} className="flex items-center gap-2">
                               {i > 0 && <span className="text-[var(--muted-2)]">→</span>}
                               <span className="px-1.5 py-0.5 rounded bg-[var(--panel-2)]">
-                                <span className="text-[var(--muted-2)]">{p.mid.toFixed(0)} км/ч</span>
+                                <span className="text-[var(--muted-2)]">{p.gate} км/ч</span>
                                 <span className="ml-1.5" style={{ color: p.rel > 0 ? 'var(--bad)' : 'var(--good)' }}>
                                   {p.rel > 0 ? '+' : '−'}{Math.abs(p.rel).toFixed(1)}%
                                 </span>
