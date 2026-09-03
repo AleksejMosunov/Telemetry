@@ -13,6 +13,7 @@ import { Library } from './cloud/Library';
 import { Overview } from './views/Overview';
 import { Corners } from './views/Corners';
 import { Traces } from './views/Traces';
+import { Pulls } from './views/Pulls';
 import { Consistency } from './views/Consistency';
 import { Replay } from './views/Replay';
 import { Findings } from './views/Findings';
@@ -86,7 +87,7 @@ function persistExcluded(v: Excluded) {
 }
 
 const TABS = [
-  ['overview', 'Обзор'], ['corners', 'Повороты'], ['traces', 'Графики'],
+  ['overview', 'Обзор'], ['corners', 'Повороты'], ['pulls', 'Разгон'], ['traces', 'Графики'],
   ['consistency', 'Стабильность'], ['replay', 'Повтор'], ['findings', 'Выводы'],
 ] as const;
 type Tab = typeof TABS[number][0];
@@ -614,6 +615,7 @@ export function App() {
           <div style={{ opacity: busy ? 0.55 : 1, transition: 'opacity .15s' }}>
             {tab === 'overview' && <Overview ctx={ctx} />}
             {tab === 'corners' && <Corners ctx={ctx} />}
+            {tab === 'pulls' && <Pulls ctx={ctx} />}
             {tab === 'traces' && <Traces ctx={ctx} />}
             {tab === 'consistency' && <Consistency ctx={ctx} />}
             {tab === 'replay' && <Replay ctx={ctx} />}
