@@ -94,7 +94,31 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                   </span>
                   <span className="text-[var(--muted)]"> дистанции разгона</span>
                 </div>
-                <div className="text-[11px] text-[var(--muted)] mt-0.5 leading-relaxed">{v.text}</div>
+                {/* Сам ряд «медленные ворота -> быстрые». Вывод про мотор держится
+                    именно на нём, и читать его из таблицы вручную пилот не должен. */}
+                {v.points.length > 1 && (
+                  <div className="flex items-center gap-2 flex-wrap mt-2 text-[11px] num">
+                    <span className="text-[var(--muted-2)]">по скорости:</span>
+                    {v.points.map((p, i) => (
+                      <span key={p.label} className="flex items-center gap-2">
+                        {i > 0 && <span className="text-[var(--muted-2)]">→</span>}
+                        <span className="px-1.5 py-0.5 rounded bg-[var(--panel-2)]">
+                          <span className="text-[var(--muted-2)]">{p.mid.toFixed(0)} км/ч</span>
+                          <span className="ml-1.5" style={{ color: p.rel > 0 ? 'var(--bad)' : 'var(--good)' }}>
+                            {p.rel > 0 ? '+' : '−'}{Math.abs(p.rel).toFixed(1)}%
+                          </span>
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">{v.text}</div>
+                {v.points.length > 1 && (
+                  <div className="text-[11px] text-[var(--muted-2)] mt-1 leading-relaxed">
+                    Правило: растёт слева направо — мотор. Ровно — масса, ось, подшипники, тормоз.
+                    Только слева — низы: карбюратор, сцепление.
+                  </div>
+                )}
                 {isFinite(dt) && Math.abs(dt) > 0.001 && (
                   <div className="text-[11px] text-[var(--muted)] mt-1 leading-relaxed">
                     В секундах это <span className="num">{dt > 0 ? '+' : '−'}{Math.abs(dt).toFixed(3)} с</span> за

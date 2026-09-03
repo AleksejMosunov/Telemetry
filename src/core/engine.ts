@@ -439,6 +439,10 @@ export interface Verdict {
   text: string;
   /** оговорка о качестве участков, если она нужна */
   note?: string;
+  /** Отставание по каждым воротам, от медленных к быстрым. Вывод про мотор
+   *  держится не на величине, а на этом ряде: интерфейс обязан показать сам ряд,
+   *  иначе пилоту приходится добывать его из таблицы вручную. */
+  points: { mid: number; rel: number; label: string }[];
 }
 
 /**
@@ -459,6 +463,7 @@ export function verdict(
       const b = r.cells.find(c => c.driverId === refId)!;
       return {
         mid: (r.gate!.vLo + r.gate!.vHi) / 2,
+        label: r.section.label,
         clean: r.clean,
         latG: r.latG, latSpread: r.latSpread,
         rel: (D(a) - D(b)) / D(b),
@@ -466,7 +471,9 @@ export function verdict(
         sig: Math.abs(D(a) - D(b)) > (isFinite(a.se) ? a.se : 0) + (isFinite(b.se) ? b.se : 0),
       };
     });
-  if (!all.length) return { kind: 'none', pct: NaN, text: 'Нет участков с общим диапазоном скоростей' };
+  if (!all.length) {
+    return { kind: 'none', pct: NaN, points: [], text: 'Нет участков с общим диапазоном скоростей' };
+  }
 
   // Про мотор судим по участкам с низкой боковой нагрузкой. Если таких нет,
   // считаем по всем, но говорим, что в цифру вошла и работа в повороте.
@@ -488,8 +495,10 @@ export function verdict(
   })();
 
   const pct = 100 * pts.reduce((s, p) => s + p.rel, 0) / pts.length;
+  const points = [...pts].sort((x, y) => x.mid - y.mid)
+    .map(p => ({ mid: p.mid, rel: 100 * p.rel, label: p.label }));
   const sig = pts.filter(p => p.sig);
-  if (!sig.length) return { kind: 'none', pct, text: 'Разница в пределах разброса по кругам — тяга одинаковая', note };
+  if (!sig.length) return { kind: 'none', pct, points, text: 'Разница в пределах разброса по кругам — тяга одинаковая', note };
 
   const mids = pts.map(p => p.mid).sort((x, y) => x - y);
   const cut = mids[mids.length >> 1];
@@ -498,11 +507,11 @@ export function verdict(
     && g.reduce((s, p) => s + p.rel, 0) / g.length > 0.01;
   const lo = slow(low), hi = slow(high);
 
-  if (pct < 0) return { kind: 'mixed', pct, text: 'Разгоняется быстрее опорного', note };
-  if (lo && hi) return { kind: 'all', pct, text: 'Отстаёт во всём диапазоне — похоже на массу или сопротивление качению (ось, подшипники, тормоза), а не на мотор', note };
-  if (hi) return { kind: 'top', pct, text: 'Отстаёт только на быстрых участках — верх мотора', note };
-  if (lo) return { kind: 'bottom', pct, text: 'Отстаёт только на медленных участках — низы: карбюратор, сцепление, передатка', note };
-  return { kind: 'mixed', pct, text: 'Отставание разбросано по участкам без общей картины', note };
+  if (pct < 0) return { kind: 'mixed', pct, points, text: 'Разгоняется быстрее опорного', note };
+  if (lo && hi) return { kind: 'all', pct, points, text: 'Отстаёт во всём диапазоне — похоже на массу или сопротивление качению (ось, подшипники, тормоза), а не на мотор', note };
+  if (hi) return { kind: 'top', pct, points, text: 'Отстаёт только на быстрых участках — верх мотора', note };
+  if (lo) return { kind: 'bottom', pct, points, text: 'Отстаёт только на медленных участках — низы: карбюратор, сцепление, передатка', note };
+  return { kind: 'mixed', pct, points, text: 'Отставание разбросано по участкам без общей картины', note };
 }
 
 /**
