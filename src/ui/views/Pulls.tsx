@@ -108,6 +108,24 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                   {v.note && (
                     <div className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed max-w-[720px]">
                       {v.note}
+                      {/* Оговорка без имён не работает: «один тянет дугу» не говорит,
+                          кто именно, а именно это и надо знать. */}
+                      {v.loads.length > 1 && (
+                        <span>
+                          {' '}Здесь{' '}
+                          {v.loads.map((l, i) => {
+                            const who = cmp.find(d => d.id === l.driverId);
+                            return (
+                              <span key={l.driverId}>
+                                {i > 0 && ', '}
+                                <span className="text-[var(--text)]">{who ? name(who) : '—'}</span>
+                                {' — '}<span className="num">{l.latG.toFixed(2)} g</span>
+                                {i === 0 ? ' (тянет дугу дольше)' : ' (раньше едет прямо)'}
+                              </span>
+                            );
+                          })}.
+                        </span>
+                      )}
                     </div>
                   )}
 

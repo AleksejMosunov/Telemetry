@@ -471,6 +471,10 @@ export interface Verdict {
   action: string;
   /** оговорка о качестве участков, если она нужна */
   note?: string;
+  /** Боковая нагрузка на разгоне по каждому участнику, от большей к меньшей.
+   *  Нужна к оговорке про разную нагрузку: «один тянет дугу, другой едет прямо»
+   *  без имён ничего не сообщает — непонятно, к кому это относится. */
+  loads: { driverId: string; latG: number }[];
   /** Отставание по каждым воротам, от медленных к быстрым. Вывод про мотор
    *  держится не на величине, а на этом ряде: интерфейс обязан показать сам ряд,
    *  иначе пилоту приходится добывать его из таблицы вручную. */
@@ -514,7 +518,7 @@ export function verdict(
     });
   if (!all.length) {
     return {
-      kind: 'none', pct: NaN, points: [],
+      kind: 'none', pct: NaN, points: [], loads: [],
       title: 'Мерить нечего',
       why: 'Ни на одном участке у сравниваемых заездов нет общего диапазона скоростей.',
       action: '',
@@ -525,6 +529,12 @@ export function verdict(
   // считаем по всем, но говорим, что в цифру вошла и работа в повороте.
   const clean = all.filter(p => p.clean);
   const pts = clean.length >= 2 ? clean : all;
+  const usedIds = new Set(pts.map(p => p.label));
+  const loadRows = rep.rows.filter(r => r.gate && !r.skip && usedIds.has(r.section.label));
+  const loads = (loadRows[0]?.cells ?? []).map(c => ({
+    driverId: c.driverId,
+    latG: med(loadRows.map(r => r.cells.find(x => x.driverId === c.driverId)!.latG).filter(isFinite)),
+  })).filter(l => isFinite(l.latG)).sort((x, y) => y.latG - x.latG);
   const note = clean.length >= 2 ? undefined : (() => {
     const dirty = all.filter(p => !p.clean);
     // Две разные беды, и лечатся они по-разному, поэтому и говорить о них надо
@@ -532,9 +542,9 @@ export function verdict(
     const unequal = dirty.filter(p => p.latSpread > LOAD_GAP).length;
     const heavy = dirty.filter(p => p.latG >= CLEAN_G).length;
     if (unequal >= heavy && unequal > 0) {
-      return 'На выходе участники нагружают карт по-разному: один уже едет прямо, другой ещё тянет дугу. '
-        + 'Разгон у них ограничен разным — у одного мотором, у другого сцеплением шин, — поэтому в цифру '
-        + 'входит траектория, а не только тяга.';
+      return 'На выходе участники нагружают карт по-разному — кто-то уже едет прямо, кто-то ещё тянет '
+        + 'дугу. Разгон у них ограничен разным: у одного мотором, у другого сцеплением шин, — поэтому в '
+        + 'цифру входит траектория, а не только тяга.';
     }
     return 'На этой трассе карт нигде не едет прямо достаточно долго: в разгон входит выход из поворота, '
       + 'поэтому в цифру попадает и траектория, а не только тяга.';
@@ -543,7 +553,7 @@ export function verdict(
   const pct = 100 * pts.reduce((s, p) => s + p.rel, 0) / pts.length;
   const points = [...pts].sort((x, y) => x.mid - y.mid)
     .map(p => ({ mid: p.mid, rel: 100 * p.rel, err: 100 * p.err, label: p.label, gate: p.gate }));
-  const base = { pct, points, note };
+  const base = { pct, points, note, loads };
 
   // Судим по среднему и по ЕГО погрешности. Раньше значимость проверялась по
   // отдельным участкам, и одного случайно вылезшего хватало, чтобы объявить
