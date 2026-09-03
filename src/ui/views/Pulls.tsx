@@ -106,7 +106,7 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                     <th className="text-right font-normal px-3 py-2" title="Диапазон скоростей, в котором меряется разгон. Считается из данных: снизу — самая высокая скорость выхода среди сравниваемых, сверху — самая низкая пиковая. Всё, что за его пределами, проезжают не все.">
                       ворота
                     </th>
-                    <th className="text-right font-normal px-3 py-2" title="Боковая нагрузка на разгоне, посчитанная из радиуса траектории и скорости. Низкая — карт едет почти прямо, и разгон ограничен мотором. Высокая — карт ещё в дуге, и в дистанцию входит траектория и сцепление шин, а не только тяга.">
+                    <th className="text-right font-normal px-3 py-2" title="Боковая нагрузка на разгоне у каждого участника, посчитанная из радиуса траектории и скорости. Низкая и одинаковая — все едут почти прямо, и разгон ограничен мотором. Высокая — карт ещё в дуге. Разная — кто-то уже распрямился, а кто-то тянет дугу, и тогда сравниваются траектории, а не тяга.">
                       нагрузка
                     </th>
                     {cmp.map(d => (
@@ -145,12 +145,24 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                             ? <span className="text-[var(--muted)]">{r.gate.vLo}→{r.gate.vHi} км/ч</span>
                             : <span className="text-[var(--muted-2)]">—</span>}
                         </td>
-                        <td className="px-3 py-2 text-right whitespace-nowrap">
-                          {isFinite(r.latG)
-                            ? <span className={r.clean ? 'text-[var(--muted)]' : 'text-[var(--muted-2)]'}>
-                                {r.latG.toFixed(2)} g{!r.clean && <span className="ml-1 text-[10px]">в дуге</span>}
-                              </span>
-                            : <span className="text-[var(--muted-2)]">—</span>}
+                        <td className="px-3 py-2 text-right whitespace-nowrap"
+                          title={r.cells.filter(c => isFinite(c.latG))
+                            .map(c => `${name(cmp.find(d => d.id === c.driverId)!)}: ${c.latG.toFixed(2)} g`)
+                            .join('\n')}>
+                          {isFinite(r.latG) ? (
+                            <span className={r.clean ? 'text-[var(--muted)]' : 'text-[var(--muted-2)]'}>
+                              {/* Когда участники нагружают карт по-разному, одна средняя цифра
+                                  прячет ровно то, из-за чего участок и негоден. */}
+                              {r.latSpread > 0.02
+                                ? `${Math.min(...r.cells.map(c => c.latG)).toFixed(2)}–${Math.max(...r.cells.map(c => c.latG)).toFixed(2)}`
+                                : r.latG.toFixed(2)} g
+                              {!r.clean && (
+                                <span className="ml-1 text-[10px]">
+                                  {r.latSpread > 0.08 ? 'по-разному' : 'в дуге'}
+                                </span>
+                              )}
+                            </span>
+                          ) : <span className="text-[var(--muted-2)]">—</span>}
                         </td>
                         {off ? (
                           <td className="px-3 py-2 text-[11px] text-[var(--muted-2)]" colSpan={cmp.length}>

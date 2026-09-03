@@ -78,7 +78,9 @@ export interface PullRow {
   skip?: string;
   /** боковая нагрузка на разгоне, g — медиана по участникам */
   latG: number;
-  /** нагрузка низкая: участок меряет мотор, а не сцепление и траекторию */
+  /** насколько по-разному участники нагружают карт на этом разгоне, g */
+  latSpread: number;
+  /** нагрузка низкая И одинаковая: участок меряет мотор, а не сцепление и траекторию */
   clean: boolean;
   cells: PullCell[];
 }
@@ -106,6 +108,17 @@ const MARGIN = 1;
  *  ограничивался мотором, а не сцеплением шин. 0.35 g — примерно четверть
  *  того, что карт держит в повороте. */
 const CLEAN_G = 0.35;
+
+/**
+ * Насколько по-разному участники могут нагружать карт, чтобы участок ещё судил
+ * мотор.
+ *
+ * Низкой средней нагрузки мало. Если один пилот от низшей точки уже едет прямо, а
+ * второй тянет дугу до самого выхода, разгон у них ограничен разным: у первого
+ * мотором, у второго сцеплением шин. Средняя по двоим спрячет это ровно
+ * посередине и покажет спокойную цифру там, где сравниваются траектории.
+ */
+const LOAD_GAP = 0.08;
 
 const ringLen = (a: number, b: number, n: number) => ((b - a) % n + n) % n;
 
@@ -220,7 +233,7 @@ export function buildPulls(
     const iA = idxOf(grid, sec.sStart), iB = idxOf(grid, sec.sEnd);
     const len = ringLen(iA, iB, n);
     const none = (skip: string): PullRow =>
-      ({ section: sec, gate: null, skip, latG: NaN, clean: false, cells: [] });
+      ({ section: sec, gate: null, skip, latG: NaN, latSpread: NaN, clean: false, cells: [] });
     if (len < 8) return none('слишком короткий');
 
     // Диапазон, который реально проезжают все: снизу — самая высокая низшая точка
@@ -294,19 +307,21 @@ export function buildPulls(
       };
     });
 
-    const latG = med(cells.map(c => c.latG).filter(isFinite));
-    const clean = isFinite(latG) && latG < CLEAN_G;
+    const gs = cells.map(c => c.latG).filter(isFinite);
+    const latG = med(gs);
+    const latSpread = gs.length > 1 ? Math.max(...gs) - Math.min(...gs) : 0;
+    const clean = isFinite(latG) && latG < CLEAN_G && latSpread <= LOAD_GAP;
 
     // Участок идёт в зачёт только если померился у всех: иначе сумма по колонкам
     // складывалась бы из разного набора участков.
     if (cells.some(c => !isFinite(c.dist))) {
-      return { section: sec, gate, latG, clean, cells, skip: 'разгон уложился не у всех' };
+      return { section: sec, gate, latG, latSpread, clean, cells, skip: 'разгон уложился не у всех' };
     }
     // Половина кругов, выпавшая из ворот, — это уже не выборка, а остаток.
     if (cells.some(c => c.n < Math.max(2, c.nTotal / 2))) {
-      return { section: sec, gate, latG, clean, cells, skip: 'в ворота уложилось мало кругов' };
+      return { section: sec, gate, latG, latSpread, clean, cells, skip: 'в ворота уложилось мало кругов' };
     }
-    return { section: sec, gate, latG, clean, cells };
+    return { section: sec, gate, latG, latSpread, clean, cells };
   });
 
   const good = rows.filter(r => r.gate && !r.skip);
@@ -363,6 +378,7 @@ export function verdict(
       return {
         mid: (r.gate!.vLo + r.gate!.vHi) / 2,
         clean: r.clean,
+        latG: r.latG, latSpread: r.latSpread,
         rel: (D(a) - D(b)) / D(b),
         // Значимой считаем разницу, которая крупнее суммарной погрешности медиан.
         sig: Math.abs(D(a) - D(b)) > (isFinite(a.se) ? a.se : 0) + (isFinite(b.se) ? b.se : 0),
@@ -374,9 +390,20 @@ export function verdict(
   // считаем по всем, но говорим, что в цифру вошла и работа в повороте.
   const clean = all.filter(p => p.clean);
   const pts = clean.length >= 2 ? clean : all;
-  const note = clean.length >= 2 ? undefined
-    : 'На этой трассе карт нигде не едет прямо достаточно долго: в разгон входит выход из поворота, '
+  const note = clean.length >= 2 ? undefined : (() => {
+    const dirty = all.filter(p => !p.clean);
+    // Две разные беды, и лечатся они по-разному, поэтому и говорить о них надо
+    // раздельно: либо прямых нет ни у кого, либо пилоты по-разному проходят выход.
+    const unequal = dirty.filter(p => p.latSpread > LOAD_GAP).length;
+    const heavy = dirty.filter(p => p.latG >= CLEAN_G).length;
+    if (unequal >= heavy && unequal > 0) {
+      return 'На выходе участники нагружают карт по-разному: один уже едет прямо, другой ещё тянет дугу. '
+        + 'Разгон у них ограничен разным — у одного мотором, у другого сцеплением шин, — поэтому в цифру '
+        + 'входит траектория, а не только тяга.';
+    }
+    return 'На этой трассе карт нигде не едет прямо достаточно долго: в разгон входит выход из поворота, '
       + 'поэтому в цифру попадает и траектория, а не только тяга.';
+  })();
 
   const pct = 100 * pts.reduce((s, p) => s + p.rel, 0) / pts.length;
   const sig = pts.filter(p => p.sig);

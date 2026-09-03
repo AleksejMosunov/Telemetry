@@ -15,20 +15,21 @@ const rep = buildPulls(a.drivers, a.corners, a.grid, a.track.length);
 const ref = a.drivers[0];
 
 console.log(`\nРАЗГОННЫЕ ВОРОТА  (пригодных участков ${rep.used} из ${rep.rows.length}, без нагрузки ${rep.cleanUsed})`);
-console.log('участок       длина   ворота        нагр.' + a.drivers.map(d => d.id.padStart(18)).join(''));
+console.log('участок       длина   ворота       нагрузка' + a.drivers.map(d => d.id.padStart(18)).join(''));
 console.log('-'.repeat(60 + 16 * a.drivers.length));
 for (const r of rep.rows) {
   const head = `${r.section.label.padEnd(12)} ${r.section.length.toFixed(0).padStart(5)} м`;
   if (!r.gate) { console.log(`${head}  — ${r.skip}`); continue; }
   const g = `${r.gate.vLo}→${r.gate.vHi} км/ч`.padEnd(13);
-  const gg = `${isFinite(r.latG) ? r.latG.toFixed(2) : '  — '}${r.clean ? ' ' : '*'}`;
+  const gs = r.cells.map(c => c.latG).filter(isFinite);
+  const gg = (gs.length ? `${Math.min(...gs).toFixed(2)}/${Math.max(...gs).toFixed(2)}` : '  —  ') + (r.clean ? '  ' : ' *');
   const cells = r.cells.map(c =>
     (isFinite(c.dist) ? `${c.dist.toFixed(1)} b${c.distBest.toFixed(1)} ±${(isFinite(c.se) ? c.se : 0).toFixed(1)} n${c.n}/${c.nTotal}` : '—')
       .padStart(18)).join('');
   console.log(`${head}  ${g}${gg}${cells}${r.skip ? '   ← ' + r.skip : ''}`);
 }
 
-console.log('\n(b = лучший разгон p20, n = кругов уложилось/всего, * = участок в дуге)');
+console.log('\n(b = лучший разгон p20, n = кругов уложилось/всего, нагрузка = мин/макс по участникам, * = участок не судит мотор)');
 console.log('\nИТОГО по пригодным участкам');
 for (const t of rep.totals) {
   const d = a.drivers.find(x => x.id === t.driverId)!;
