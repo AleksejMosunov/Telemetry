@@ -91,13 +91,22 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                       пилоту ничего не говорят, а полсекунды за круг — говорят. */}
                   <div className="text-[15px] font-medium">{v.title}</div>
                   <div className="text-[12px] text-[var(--muted)] mt-0.5">
-                    {isFinite(dt) && Math.abs(dt) > 0.001 ? (
+                    {!isFinite(dt) || Math.abs(dt) < 0.001 ? (
+                      <>Сравнение с «{name(ref)}».</>
+                    ) : v.kind === 'none' ? (
+                      /* Заголовок говорит «одинаково» — значит и секунды нельзя
+                         подавать как выигрыш: это та же цифра, только не значимая. */
+                      <>Формально «{name(d)}» {dt > 0 ? 'медленнее' : 'быстрее'} на{' '}
+                        <span className="num">{Math.abs(dt).toFixed(2)} с</span> за круг на разгонах,
+                        но эта разница неотличима от разброса между кругами.
+                      </>
+                    ) : (
                       <>Карт «{name(d)}» {dt > 0 ? 'теряет' : 'выигрывает'}{' '}
                         <span className="num" style={{ color: dt > 0 ? 'var(--bad)' : 'var(--good)' }}>
                           {Math.abs(dt).toFixed(2)} с
                         </span> за круг на разгонах.
                       </>
-                    ) : <>Сравнение с «{name(ref)}».</>}
+                    )}
                   </div>
                   <div className="text-[12px] mt-2 leading-relaxed max-w-[720px]">{v.why}</div>
                   {v.action && (
