@@ -148,18 +148,26 @@ function mad(a: number[]): number {
   return 1.4826 * med(a.map(v => Math.abs(v - m)));
 }
 
-/** Участки разгона: апекс каждого поворота -> вход в следующий. */
+/**
+ * Участки разгона: от апекса поворота до апекса следующего.
+ *
+ * Границей был вход в следующий поворот — и это обрезало замер там, где за
+ * прямой идёт скоростная дуга: карт продолжает разгоняться в ней, а окно уже
+ * закончилось, и верх мотора не меряется нигде. Апекс — граница честнее: между
+ * двумя апексами гарантированно лежит ровно один пик скорости, и разгон
+ * заканчивается на нём, а не на пороге кривизны.
+ */
 export function buildSections(corners: Corner[], length: number): Section[] {
   const n = corners.length;
   if (n < 2) return [];
   return corners.map((c, i) => {
     const next = corners[(i + 1) % n];
-    let len = next.sStart - c.sApex;
+    let len = next.sApex - c.sApex;
     if (len < 0) len += length;
     return {
       id: i + 1,
       label: `${c.name} → ${next.name}`,
-      sStart: c.sApex, sEnd: next.sStart, length: len,
+      sStart: c.sApex, sEnd: next.sApex, length: len,
     };
   });
 }
@@ -206,14 +214,65 @@ function timeAt(t: Float64Array, i0: number, d: number, n: number, tFull: number
   return a + (b - a) * (d - f);
 }
 
-/** Низшая точка скорости внутри окна — от неё начинается разгон. */
-function argMin(v: Float64Array, i0: number, len: number, n: number): number {
-  let best = Infinity, at = 0;
+/** Мгновенная боковая нагрузка, g. Угол руля из телеметрии не восстановить, а
+ *  радиус, который карт пишет, меряется точно — и вместе со скоростью даёт
+ *  перегрузку без акселерометра: a = v²·κ. */
+const latAt = (v: number, kap: number) =>
+  (isFinite(kap) ? ((v / 3.6) ** 2 * Math.abs(kap)) / 9.81 : NaN);
+
+/**
+ * Разгон внутри окна: от низшей точки скорости до пика.
+ *
+ * Пик ищется первым, минимум — до него. Наоборот нельзя: окно тянется от апекса
+ * до апекса, и самая низкая скорость в нём — это следующий поворот, а не выход
+ * из текущего.
+ *
+ * Отдельно ищется самый длинный кусок разгона, который карт едет прямо, — по
+ * нему и меряется мотор. Отсекать просто «до первой нагрузки» нельзя: разгон
+ * начинается на апексе, где нагрузка максимальная, и такая отсечка срабатывала
+ * бы мгновенно, объявляя браком даже чистые прямые. Прямой кусок начинается
+ * там, где карт распрямился, и кончается там, где входит в следующую дугу, —
+ * а на трассе, где сразу за прямой идёт быстрый поворот, это единственный
+ * способ не выбросить участок целиком вместе с его честным началом.
+ */
+function pullWindow(
+  v: Float64Array, kap: Float64Array, i0: number, len: number, n: number,
+): { min: number; peak: number; vMin: number; vPeak: number; sLo: number; sHi: number } {
+  let peak = 0, hi = -Infinity;
   for (let d = 0; d <= len; d++) {
     const x = v[(i0 + d) % n];
-    if (x < best) { best = x; at = d; }
+    if (x > hi) { hi = x; peak = d; }
   }
-  return at;
+  let min = 0, lo = Infinity;
+  for (let d = 0; d <= peak; d++) {
+    const x = v[(i0 + d) % n];
+    if (x < lo) { lo = x; min = d; }
+  }
+
+  // Самый длинный участок низкой нагрузки между минимумом и пиком. Три отсчёта
+  // подряд, а не один: одиночный выброс гироскопа не должен рвать прямую надвое.
+  let bestA = -1, bestB = -1, curA = -1, over = 0;
+  const close = (end: number) => {
+    if (curA >= 0 && end - curA > bestB - bestA) { bestA = curA; bestB = end; }
+    curA = -1;
+  };
+  for (let d = min; d <= peak; d++) {
+    const i = (i0 + d) % n;
+    const g = latAt(v[i], kap[i]);
+    if (isFinite(g) && g > CLEAN_G) {
+      if (++over >= 3) close(d - over);
+      continue;
+    }
+    over = 0;
+    if (curA < 0) curA = d;
+  }
+  close(peak);
+
+  return {
+    min, peak, vMin: lo, vPeak: hi,
+    sLo: bestA >= 0 ? v[(i0 + bestA) % n] : NaN,
+    sHi: bestB >= 0 ? v[(i0 + bestB) % n] : NaN,
+  };
 }
 
 /**
@@ -244,15 +303,15 @@ export function buildPulls(
     // скорости, сверху — самая низкая пиковая. Ниже нижней границы кто-то уже
     // едет быстрее и разгон не с чего начинать, выше верхней кто-то не доезжает.
     let vLo = -Infinity, vHi = Infinity;
+    let sLo = -Infinity, sHi = Infinity;
     let enough = true;
     for (const d of drivers) {
       const mins: number[] = [], peaks: number[] = [];
+      const straightLo: number[] = [], straightHi: number[] = [];
       for (const tr of d.traces) {
-        const dMin = argMin(tr.v, iA, len, n);
-        mins.push(tr.v[(iA + dMin) % n]);
-        let p = -Infinity;
-        for (let k = dMin; k <= len; k++) p = Math.max(p, tr.v[(iA + k) % n]);
-        peaks.push(p);
+        const w = pullWindow(tr.v, tr.kap, iA, len, n);
+        mins.push(w.vMin); peaks.push(w.vPeak);
+        if (isFinite(w.sLo)) { straightLo.push(w.sLo); straightHi.push(w.sHi); }
       }
       if (!mins.length) { enough = false; break; }
       // Нижняя граница — почти максимум минимумов: круги, где карт вообще не
@@ -260,32 +319,42 @@ export function buildPulls(
       // потерять половину. Верхняя — наоборот, почти минимум пиков.
       vLo = Math.max(vLo, quantile(mins, 0.95));
       vHi = Math.min(vHi, quantile(peaks, 0.1));
+      if (straightLo.length) {
+        sLo = Math.max(sLo, med(straightLo));
+        sHi = Math.min(sHi, med(straightHi));
+      }
     }
     if (!enough) return none('нет кругов');
 
-    const gLo = Math.ceil(vLo) + MARGIN;
-    const gHi = Math.floor(vHi) - MARGIN;
-    if (gHi - gLo < MIN_SPAN) return none(`общий диапазон всего ${Math.max(0, gHi - gLo)} км/ч`);
-    const gate: Gate = { vLo: gLo, vHi: gHi };
+    // Сначала пробуем померить только прямую часть разгона: так участок с
+    // быстрой дугой в конце не уходит в брак целиком вместе с честным началом.
+    // Не влезло — меряем разгон целиком и помечаем, что тягу он судит вместе с
+    // траекторией.
+    const clean0 = {
+      vLo: Math.ceil(Math.max(vLo, sLo)) + MARGIN,
+      vHi: Math.floor(Math.min(vHi, sHi)) - MARGIN,
+    };
+    const full = { vLo: Math.ceil(vLo) + MARGIN, vHi: Math.floor(vHi) - MARGIN };
+    const capped = clean0.vHi - clean0.vLo >= MIN_SPAN;
+    if (!capped && full.vHi - full.vLo < MIN_SPAN) {
+      return none(`общий диапазон всего ${Math.max(0, full.vHi - full.vLo)} км/ч`);
+    }
+    const gate: Gate = capped ? clean0 : full;
 
     const cells: PullCell[] = drivers.map(d => {
       const laps: PullLap[] = [];
       for (const tr of d.traces) {
         const tFull = tr.t[n - 1] + (tr.t[n - 1] - tr.t[n - 2]);
-        const dMin = argMin(tr.v, iA, len, n);
-        const dLo = crossUp(tr.v, iA, dMin, len, gate.vLo, n);
+        const w = pullWindow(tr.v, tr.kap, iA, len, n);
+        const dLo = crossUp(tr.v, iA, w.min, w.peak, gate.vLo, n);
         if (!isFinite(dLo)) continue;
-        const dHi = crossUp(tr.v, iA, Math.ceil(dLo), len, gate.vHi, n);
+        const dHi = crossUp(tr.v, iA, Math.ceil(dLo), w.peak, gate.vHi, n);
         if (!isFinite(dHi) || dHi <= dLo) continue;
-        // Боковая нагрузка из кривизны траектории: a = v²·κ. Угол руля из
-        // телеметрии не восстановить, а вот радиус, который карт пишет, меряется
-        // точно — и вместе со скоростью даёт перегрузку без акселерометра.
         let gSum = 0, gCnt = 0;
         for (let k = Math.ceil(dLo); k <= Math.floor(dHi); k++) {
-          const i = (iA + k) % n;
-          if (!isFinite(tr.kap[i])) continue;
-          gSum += ((tr.v[i] / 3.6) ** 2 * Math.abs(tr.kap[i])) / 9.81;
-          gCnt++;
+          const g = latAt(tr.v[(iA + k) % n], tr.kap[(iA + k) % n]);
+          if (!isFinite(g)) continue;
+          gSum += g; gCnt++;
         }
         laps.push({
           lapIndex: tr.lapIndex,
@@ -314,7 +383,9 @@ export function buildPulls(
     const gs = cells.map(c => c.latG).filter(isFinite);
     const latG = med(gs);
     const latSpread = gs.length > 1 ? Math.max(...gs) - Math.min(...gs) : 0;
-    const clean = isFinite(latG) && latG < CLEAN_G && latSpread <= LOAD_GAP;
+    // Чистым участок считается, только если ворота удалось удержать в пределах
+    // прямой части разгона: иначе в дистанцию вошла дуга.
+    const clean = capped && isFinite(latG) && latG < CLEAN_G && latSpread <= LOAD_GAP;
 
     // Участок идёт в зачёт только если померился у всех: иначе сумма по колонкам
     // складывалась бы из разного набора участков.
