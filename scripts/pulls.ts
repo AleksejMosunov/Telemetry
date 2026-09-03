@@ -44,7 +44,10 @@ for (const d of a.drivers) {
   if (d.id === ref.id) continue;
   for (const m of ['median', 'best'] as const) {
     const v = verdict(rep, ref.id, d.id, m);
-    console.log(`  [${m.padEnd(6)}] ${d.name}: ${v.pct.toFixed(1)}% — ${v.text}`);
+    console.log(`  [${m.padEnd(6)}] ${v.title.toUpperCase()}  (среднее ${v.pct.toFixed(1)}%)`);
+    console.log(`            ряд: ${v.points.map(p => `${p.mid.toFixed(0)} км/ч ${p.rel > 0 ? '+' : '−'}${Math.abs(p.rel).toFixed(1)}% ±${p.err.toFixed(1)}`).join('  ')}`);
+    console.log(`            ${v.why}`);
+    if (v.action) console.log(`            что делать: ${v.action}`);
     if (v.note) console.log(`            ${v.note}`);
   }
   console.log(`  шумовой пол: медиана ${noiseFloor(ref, a.corners, a.grid, a.track.length).toFixed(2)}%, лучшие ${noiseFloor(ref, a.corners, a.grid, a.track.length, 'best').toFixed(2)}%`);

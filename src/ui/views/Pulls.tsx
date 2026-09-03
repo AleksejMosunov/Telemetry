@@ -127,14 +127,16 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
                                 <span className="ml-1.5" style={{ color: p.rel > 0 ? 'var(--bad)' : 'var(--good)' }}>
                                   {p.rel > 0 ? '+' : '−'}{Math.abs(p.rel).toFixed(1)}%
                                 </span>
+                                <span className="ml-1 text-[var(--muted-2)]">±{p.err.toFixed(1)}</span>
                               </span>
                             </span>
                           ))}
                         </div>
                       )}
                       <div>
-                        Растёт слева направо — мотор. Ровно — масса, ось, подшипники, тормоз.
-                        Только слева — карбюратор и сцепление.
+                        Растёт слева направо — мотор или лишнее трение. Ровно — лишняя масса.
+                        Падает — низы: карбюратор, сцепление. Наклон считается настоящим, только
+                        если он крупнее погрешности крайних значений.
                       </div>
                       {isFinite(floor) && (
                         <div>
