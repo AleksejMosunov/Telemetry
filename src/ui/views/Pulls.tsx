@@ -83,68 +83,71 @@ export function Pulls({ ctx }: { ctx: ViewCtx }) {
       ) : (
         <>
           {verdicts.map(({ d, v, dt }) => (
-            <div key={d.id} className="panel p-4 flex items-start gap-3">
-              <span className="w-2 h-2 rounded-full mt-1.5 shrink-0" style={{ background: color(d) }} />
-              <div className="min-w-0">
-                <div className="text-[13px]">
-                  <span className="font-medium">{name(d)}</span>
-                  <span className="text-[var(--muted)]"> относительно «{name(ref)}»: </span>
-                  <span className="num" style={{ color: v.pct > 0 ? 'var(--bad)' : v.pct < 0 ? 'var(--good)' : 'var(--muted)' }}>
-                    {v.pct > 0 ? '+' : v.pct < 0 ? '−' : ''}{Math.abs(v.pct).toFixed(1)}%
-                  </span>
-                  <span className="text-[var(--muted)]"> дистанции разгона</span>
+            <div key={d.id} className="panel p-4">
+              <div className="flex items-start gap-3">
+                <span className="w-2 h-2 rounded-full mt-2 shrink-0" style={{ background: color(d) }} />
+                <div className="min-w-0">
+                  {/* Ответ идёт первым и в секундах: проценты дистанции разгона
+                      пилоту ничего не говорят, а полсекунды за круг — говорят. */}
+                  <div className="text-[15px] font-medium">{v.title}</div>
+                  <div className="text-[12px] text-[var(--muted)] mt-0.5">
+                    {isFinite(dt) && Math.abs(dt) > 0.001 ? (
+                      <>Карт «{name(d)}» {dt > 0 ? 'теряет' : 'выигрывает'}{' '}
+                        <span className="num" style={{ color: dt > 0 ? 'var(--bad)' : 'var(--good)' }}>
+                          {Math.abs(dt).toFixed(2)} с
+                        </span> за круг на разгонах.
+                      </>
+                    ) : <>Сравнение с «{name(ref)}».</>}
+                  </div>
+                  <div className="text-[12px] mt-2 leading-relaxed max-w-[720px]">{v.why}</div>
+                  {v.action && (
+                    <div className="text-[12px] mt-1.5 leading-relaxed max-w-[720px]">
+                      <span className="text-[var(--muted)]">Что делать: </span>{v.action}
+                    </div>
+                  )}
+                  {v.note && (
+                    <div className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed max-w-[720px]">
+                      {v.note}
+                    </div>
+                  )}
+
+                  <details className="mt-3 text-[11px] group">
+                    <summary className="text-[var(--muted-2)] hover:text-[var(--text)] cursor-pointer select-none">
+                      как это посчитано
+                    </summary>
+                    <div className="mt-2 flex flex-col gap-2 text-[var(--muted)] leading-relaxed">
+                      {v.points.length > 1 && (
+                        <div className="flex items-center gap-2 flex-wrap num">
+                          <span className="text-[var(--muted-2)]">насколько длиннее разгон:</span>
+                          {v.points.map((p, i) => (
+                            <span key={p.label} className="flex items-center gap-2">
+                              {i > 0 && <span className="text-[var(--muted-2)]">→</span>}
+                              <span className="px-1.5 py-0.5 rounded bg-[var(--panel-2)]">
+                                <span className="text-[var(--muted-2)]">{p.mid.toFixed(0)} км/ч</span>
+                                <span className="ml-1.5" style={{ color: p.rel > 0 ? 'var(--bad)' : 'var(--good)' }}>
+                                  {p.rel > 0 ? '+' : '−'}{Math.abs(p.rel).toFixed(1)}%
+                                </span>
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div>
+                        Растёт слева направо — мотор. Ровно — масса, ось, подшипники, тормоз.
+                        Только слева — карбюратор и сцепление.
+                      </div>
+                      {isFinite(floor) && (
+                        <div>
+                          Шумовой пол — {floor.toFixed(1)}%: настолько расходятся две половины кругов
+                          опорного заезда, где карт заведомо один и тот же. Среднее отставание тут{' '}
+                          {Math.abs(v.pct).toFixed(1)}% — {Math.abs(v.pct) > floor * 2
+                            ? 'заметно крупнее, на него можно опираться.'
+                            : 'сопоставимо с ним, вывод делать рано.'}
+                        </div>
+                      )}
+                    </div>
+                  </details>
                 </div>
-                {/* Сам ряд «медленные ворота -> быстрые». Вывод про мотор держится
-                    именно на нём, и читать его из таблицы вручную пилот не должен. */}
-                {v.points.length > 1 && (
-                  <div className="flex items-center gap-2 flex-wrap mt-2 text-[11px] num">
-                    <span className="text-[var(--muted-2)]">по скорости:</span>
-                    {v.points.map((p, i) => (
-                      <span key={p.label} className="flex items-center gap-2">
-                        {i > 0 && <span className="text-[var(--muted-2)]">→</span>}
-                        <span className="px-1.5 py-0.5 rounded bg-[var(--panel-2)]">
-                          <span className="text-[var(--muted-2)]">{p.mid.toFixed(0)} км/ч</span>
-                          <span className="ml-1.5" style={{ color: p.rel > 0 ? 'var(--bad)' : 'var(--good)' }}>
-                            {p.rel > 0 ? '+' : '−'}{Math.abs(p.rel).toFixed(1)}%
-                          </span>
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <div className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">{v.text}</div>
-                {v.points.length > 1 && (
-                  <div className="text-[11px] text-[var(--muted-2)] mt-1 leading-relaxed">
-                    Правило: растёт слева направо — мотор. Ровно — масса, ось, подшипники, тормоз.
-                    Только слева — низы: карбюратор, сцепление.
-                  </div>
-                )}
-                {isFinite(dt) && Math.abs(dt) > 0.001 && (
-                  <div className="text-[11px] text-[var(--muted)] mt-1 leading-relaxed">
-                    В секундах это <span className="num">{dt > 0 ? '+' : '−'}{Math.abs(dt).toFixed(3)} с</span> за
-                    круг на зачётных разгонах
-                    {(() => {
-                      const lap = d.stats.median - ref.stats.median;
-                      if (!isFinite(lap) || Math.abs(lap) < 0.02) return '.';
-                      const share = Math.round(100 * dt / lap);
-                      return share > 0 && share <= 130
-                        ? ` — это ${share}% всей разницы кругов (${lap > 0 ? '+' : '−'}${Math.abs(lap).toFixed(3)} с).`
-                        : `, при разнице кругов ${lap > 0 ? '+' : '−'}${Math.abs(lap).toFixed(3)} с.`;
-                    })()}
-                  </div>
-                )}
-                {v.note && (
-                  <div className="text-[11px] text-[var(--warn,var(--muted))] mt-1 leading-relaxed">{v.note}</div>
-                )}
-                {isFinite(floor) && (
-                  <div className="text-[11px] text-[var(--muted-2)] mt-1 leading-relaxed">
-                    Шумовой пол метода — <span className="num">{floor.toFixed(1)}%</span>: настолько
-                    расходятся между собой две половины кругов опорного заезда, где карт заведомо один
-                    и тот же. {Math.abs(v.pct) > floor * 2
-                      ? 'Разница крупнее — на неё можно опираться.'
-                      : 'Разница сопоставима с ним — вывод делать рано.'}
-                  </div>
-                )}
               </div>
             </div>
           ))}
