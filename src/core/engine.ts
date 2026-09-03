@@ -124,6 +124,10 @@ const CLEAN_G = 0.35;
  */
 const LOAD_GAP = 0.08;
 
+/** Сложение независимых погрешностей: корень из суммы квадратов. */
+const quadSum = (a: number, b: number) =>
+  Math.sqrt((isFinite(a) ? a : 0) ** 2 + (isFinite(b) ? b : 0) ** 2);
+
 const ringLen = (a: number, b: number, n: number) => ((b - a) % n + n) % n;
 
 function med(a: number[]): number {
@@ -497,9 +501,12 @@ export function verdict(
         rel: (D(a) - D(b)) / D(b),
         // Погрешность самого отставания, в тех же долях: без неё нельзя отличить
         // настоящий наклон ряда от того, что просто по-разному легло по кругам.
-        err: ((isFinite(a.se) ? a.se : 0) + (isFinite(b.se) ? b.se : 0)) / D(b),
-        // Значимой считаем разницу, которая крупнее суммарной погрешности медиан.
-        sig: Math.abs(D(a) - D(b)) > (isFinite(a.se) ? a.se : 0) + (isFinite(b.se) ? b.se : 0),
+        // Складывается через квадраты, а не напрямую: промахи двух заездов
+        // независимы и частично гасят друг друга, поэтому прямая сумма завышает
+        // погрешность примерно в полтора раза — и прячет настоящий наклон.
+        err: quadSum(a.se, b.se) / D(b),
+        // Значимой считаем разницу, которая крупнее погрешности медиан.
+        sig: Math.abs(D(a) - D(b)) > quadSum(a.se, b.se),
       };
     });
   if (!all.length) {
@@ -568,7 +575,7 @@ export function verdict(
   // когда ряд явно шёл вниз, — текст расходился с числами прямо под ним.
   const a = points[0], b = points[points.length - 1];
   const change = b.rel - a.rel;
-  const err = a.err + b.err;
+  const err = quadSum(a.err, b.err);
   const pair = `${a.rel.toFixed(1)}% на ${a.mid.toFixed(0)} км/ч и ${b.rel.toFixed(1)}% на ${b.mid.toFixed(0)} км/ч`;
 
   // Тест на форму работает только там, где мотор и масса расходятся заметнее
